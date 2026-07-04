@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "routing",
+    "adapters/mqtt",
+    "adapters/kafka",
+    "adapters/amqp",
+    "adapters/resp",
+    "conformance/harness",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+openraft = "0.9"
+bytes = "1"
+
+# Linux-only io_uring runtime, picked in Phase 0 per TODO.md so the storage
+# engine's write path is designed against it from Phase 1 rather than retrofitted.
+[workspace.dependencies.tokio-uring]
+version = "0.5"

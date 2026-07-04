@@ -1,0 +1,97 @@
+# Project Design Document: tpt-synapse (Unified Data Fabric)
+
+## 1. Executive Summary
+**Product Name:** `tpt-synapse`  
+**Category:** Infrastructure / Unified Data Fabric / Multi-Protocol Message Broker  
+**Primary Language:** Rust (Core Engine & Adapters) / Go (Control Plane & CLI)  
+**Vision:** To replace the fragmented landscape of specialized brokers (Kafka, RabbitMQ, Redis, Mosquitto) with a single, hyper-performant, unified data plane. `tpt-synapse` provides a shared core storage and routing engine that natively speaks MQTT, Kafka, AMQP, and Redis protocols, acting as the central nervous system for the TPT infrastructure ecosystem.
+
+---
+
+## 2. The "Doing Better" Philosophy: Stripping Legacy Baggage
+Before designing the architecture, we must address why the current industry standards (Kafka and AMQP) are notoriously complex, and how `tpt-synapse` will modernize them.
+
+### 2.1. Why Kafka is Complex (and our solution)
+*   **The Problem:** Kafka was built in 2011. It relies on heavy JVM Garbage Collection (causing latency spikes), historically required a separate, complex ZooKeeper cluster for coordination, and has a massive, intimidating configuration surface area. Its partition/replica management is rigid.
+*   **The `tpt-synapse` Solution:** 
+    *   **Zero GC:** Written entirely in Rust. Memory is strictly managed, ensuring predictable, microsecond-level latency without GC pauses.
+    *   **Embedded Consensus:** We drop external dependencies like ZooKeeper. We use an embedded Raft consensus library directly within the Rust binary for cluster coordination.
+    *   **Modern I/O:** Instead of standard Java NIO, we use Linux `io_uring` and memory-mapped files (`mmap`) for zero-copy, asynchronous disk I/O, drastically reducing CPU overhead during massive log writes.
+
+### 2.2. Why AMQP (RabbitMQ) is Complex (and our solution)
+*   **The Problem:** AMQP 0-9-1 is a 15-year-old protocol designed for the "Enterprise Service Bus" era. It is bloated with complex exchange types, heavy binary framing overhead, and rarely-used features like distributed XA transactions. It is a nightmare to implement fully and efficiently.
+*   **The `tpt-synapse` Solution:** 
+    *   **The "Lite" Adapter:** We will implement the AMQP *wire protocol* so legacy clients can connect, but we will **not** implement the entire bloated specification. 
+    *   **Internal Simplification:** We map AMQP concepts (Exchanges, Bindings, Queues) to our simplified internal Unified Routing Graph. We explicitly drop support for legacy distributed transactions (XA) and complex message prioritization, focusing purely on high-throughput task routing and pub/sub.
+
+---
+
+## 3. Unified Core Architecture
+Instead of building four separate applications, `tpt-synapse` is built as a single binary with a modular architecture.
+
+### 3.1. The Unified Storage Engine
+The core manages three logical data primitives, all backed by a single, highly optimized physical storage layer (using an LSM-tree or segmented append-only logs):
+1.  **The Log:** An immutable, append-only sequence of records (Powers Kafka & MQTT QoS 1/2).
+2.  **The Queue:** A mutable, FIFO structure with acknowledgment tracking (Powers AMQP & Task Queues).
+3.  **The Map:** A concurrent, in-memory Key-Value store with TTL support (Powers Redis).
+
+### 3.2. The Unified Routing & Compute Engine
+The "brain" of the broker. It receives parsed commands from the protocol adapters and executes them against the storage engine.
+*   **Topic Router:** Handles hierarchical Pub/Sub matching (MQTT).
+*   **Stream Router:** Handles consumer groups, offset tracking, and log tailing (Kafka).
+*   **Graph Router:** Handles exchange-to-queue bindings and complex routing keys (AMQP).
+*   **Rule Engine:** A lightweight, embedded SQL-like engine to filter, transform, and route messages on the fly without external integration layers.
+
+### 3.3. The Polyglot Protocol Adapters
+These are lightweight translation layers that sit on top of the core. They parse network bytes into internal commands, and format internal responses back into network bytes.
+*   **MQTT Adapter (v3.1.1 / v5.0):** Optimized for constrained IoT devices. Handles keep-alives, clean sessions, and wildcard topic matching.
+*   **Kafka Adapter:** Implements the Kafka wire protocol. Translates Kafka produce/fetch requests into core Log writes/reads.
+*   **AMQP Adapter (0-9-1 "Lite"):** Translates AMQP frames into core Queue and Graph routing operations.
+*   **RESP Adapter (Redis):** Translates Redis Serialization Protocol commands (GET, SET, PUBLISH, XADD) into core Map and Log operations.
+
+---
+
+## 4. Integration with Existing TPT Infrastructure
+`tpt-synapse` is the connective tissue for the broader TPT ecosystem:
+*   **`tpt-stratum` (IoT/Edge):** Edge nodes use the **MQTT Adapter** to send telemetry. The data is instantly available to backend services via the **Kafka Adapter** for stream processing, or the **RESP Adapter** for real-time state caching.
+*   **`tpt-boxcar` (App Lifecycle & eBPF):** Because the entire core is written in Rust and uses `io_uring`, `tpt-boxcar` can attach eBPF probes to the kernel I/O layer. This provides zero-overhead, end-to-end distributed tracing of a message from the network card, through the protocol adapter, into the storage engine, and out to the consumer.
+*   **`tpt-identity` (Security):** Every protocol adapter natively supports mTLS. Device and service identities are verified against `tpt-identity` before a single byte of payload is processed.
+*   **`tpt-mesh` (Networking):** The Control Plane uses `tpt-mesh` for secure, encrypted node-to-node cluster gossip and state replication.
+
+---
+
+## 5. Key Differentiators (Why this is a "Better" Solution)
+1.  **One Binary to Rule Them All:** Operations teams no longer need to deploy, patch, and monitor Kafka, Redis, RabbitMQ, and Mosquitto. They deploy one `tpt-synapse` cluster.
+2.  **Zero-Copy Data Sharing:** Because all protocols share the same underlying storage engine, moving data from MQTT ingestion to Kafka-style streaming requires **zero data duplication** in memory or on disk. 
+3.  **Predictable Edge Footprint:** The Rust core can be compiled to run on anything from a 512MB Raspberry Pi edge node (running only the MQTT adapter) to a 128-core cloud server (running all adapters at massive scale).
+4.  **Kernel-Level Observability:** Native eBPF integration via `tpt-boxcar` makes it the most observable message broker in the world.
+
+---
+
+## 6. Development Roadmap
+
+### Phase 1: The Core Engine & Storage (Months 1-3)
+*   Build the unified Rust storage engine (Log, Queue, Map primitives).
+*   Implement `io_uring` based async network I/O.
+*   Build the internal Unified Routing Engine.
+*   *Milestone:* The core can handle 1M+ internal routing operations per second on a single node.
+
+### Phase 2: First Adapters - MQTT & RESP (Months 4-5)
+*   Implement the MQTT v5.0 protocol adapter (crucial for `tpt-stratum` IoT edge).
+*   Implement the RESP (Redis) protocol adapter (crucial for caching and state).
+*   *Milestone:* `tpt-synapse` can replace Mosquitto and Redis in the TPT ecosystem.
+
+### Phase 3: High-Throughput Adapters - Kafka & AMQP (Months 6-8)
+*   Implement the Kafka wire protocol adapter with consumer group management.
+*   Implement the "Lite" AMQP 0-9-1 adapter for legacy microservice compatibility.
+*   *Milestone:* `tpt-synapse` can fully replace Kafka and RabbitMQ for backend data pipelines and task queues.
+
+### Phase 4: Clustering, Consensus & Ecosystem Integration (Months 9-11)
+*   Implement the Go-based Control Plane.
+*   Build the embedded Raft consensus for multi-node high availability and log replication.
+*   Integrate `tpt-identity` for zero-trust mTLS across all adapters.
+*   Implement `tpt-boxcar` eBPF probes for kernel-level observability.
+*   *Milestone:* A fully clustered, zero-trust, deeply observable Unified Data Fabric ready for enterprise production.
+
+Integrations with other TPT modules, are optional and secondary priority.
+

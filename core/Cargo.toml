@@ -1,0 +1,17 @@
+[package]
+name = "synapse-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+openraft = { workspace = true }
+bytes = { workspace = true }
+
+# tokio-uring wraps liburing, which only exists on Linux. Keeping the
+# dependency target-gated lets `cargo build`/`cargo test` succeed on any
+# workstation OS while the production I/O path stays io_uring-based on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { workspace = true }

@@ -1,0 +1,13 @@
+/target/
+**/target/
+*.exe
+*.pdb
+
+# Go
+/dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
