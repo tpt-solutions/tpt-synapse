@@ -200,7 +200,7 @@ impl Broker {
             if !seen.insert(client_id.clone()) {
                 continue;
             }
-            let granted = qos_map.get(&key).copied().unwrap_or(QoS::AtMostOnce);
+            let granted = qos_map.get(&*key).copied().unwrap_or(QoS::AtMostOnce);
             let eff = QoS::from_u8((p.qos as u8).min(granted as u8)).unwrap();
             let packet_id = if eff != QoS::AtMostOnce {
                 clients.get(&client_id).map(|c| c.next_packet_id.fetch_add(1, Ordering::Relaxed))

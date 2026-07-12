@@ -70,16 +70,22 @@ for the wire adapters or clustering.
 - [x] Multi-tenancy: namespace isolation and per-tenant throughput/storage quotas
       in the storage and routing primitives, cheaper to build in now than retrofit
       after Phase 3 — `core/src/tenant.rs`
-- [ ] WASM-based transform plugins (via `wasmtime`) as an alternative/addition to
-      the SQL-like Rule Engine, for sandboxed untrusted per-tenant transform code
+- [x] WASM-based transform plugins (via `wasmtime`) as an alternative/addition to
+      the SQL-like Rule Engine, for sandboxed untrusted per-tenant transform code —
+      `routing/src/wasm_transform.rs` (fuel + linear-memory limits per invocation,
+      stateless-by-construction plugin ABI)
 - [ ] **Milestone:** core sustains 1M+ internal routing ops/sec on a single node,
       tracked via continuous benchmark history (`criterion` + historical tracking),
       not just a one-time check, so perf regressions are caught per-PR — the gate
       test and `criterion` bench exist (`routing/src/topic.rs`,
-      `core/benches/routing_bench.rs`) but the gate currently **fails**: measured
-      ~64k ops/sec in `--release` (~15.6k in debug) on `TopicRouter::route`, over
-      an order of magnitude short of the 1M target — needs profiling/optimization
-      before this can be checked off
+      `core/benches/routing_bench.rs`). `TopicRouter`'s matcher was rewritten
+      around a pre-compiled, allocation-free segment matcher
+      (`routing/src/topic.rs`'s `CompiledFilter`/`match_forward`/`match_segs`),
+      raising throughput from ~64k to **~948k ops/sec** in `--release`
+      (measured via `cargo test -p synapse-routing --release
+      sustains_one_million_ops_per_sec`) — within ~5% of the 1M target but the
+      gate still **fails**; needs one more optimization pass before this can be
+      checked off
 
 ## Phase 2 — MQTT & RESP Adapters (spec.txt §6 Phase 2)
 
@@ -97,26 +103,48 @@ for the wire adapters or clustering.
       tests for the MQTT and RESP adapters (`adapters/mqtt/tests/integration.rs`,
       `adapters/resp/tests/integration.rs`); the canonical out-of-process
       `paho-mqtt` / `redis-rs` client suites remain tracked follow-ups in
-      `conformance/harness/src/lib.rs`. A compatibility-matrix / migration-checker
-      doc is still pending.
+      `conformance/harness/src/lib.rs` (feature-gated, `#[ignore]`d until wired
+      in). Published compatibility matrix + migration checker now live in
+      [conformance/COMPATIBILITY.md](conformance/COMPATIBILITY.md).
 - [ ] **Milestone:** tpt-synapse can replace Mosquitto and Redis in the TPT
-      ecosystem — MQTT 3.1.1 + RESP are wire-compatible and tested end-to-end;
-      MQTT v5.0 parity and a published compatibility matrix are the remaining
-      gaps before this milestone is declared.
+      ecosystem — MQTT 3.1.1 + RESP are wire-compatible and tested end-to-end,
+      with a published compatibility matrix; MQTT v5.0 parity is the remaining
+      gap before this milestone is declared.
 
 ## Phase 3 — Kafka & AMQP Adapters (spec.txt §6 Phase 3)
 
-- [ ] Kafka wire protocol adapter: produce/fetch → Log writes/reads
-- [ ] Kafka consumer group management (offsets, rebalancing) via Stream Router
-- [ ] AMQP 0-9-1 "Lite" adapter: Exchanges/Bindings/Queues → Graph Router and Queue
-      primitive
-- [ ] Explicitly out of scope for the Lite adapter: distributed XA transactions,
-      complex message prioritization
-- [ ] Populate the Phase 0 conformance harness with `librdkafka` and `pika`/`amqp`
-      client test suites; extend the compatibility matrix + migration-checker to
-      the Kafka and AMQP adapters
+- [x] Kafka wire protocol adapter: produce/fetch → Log writes/reads —
+      `adapters/kafka/src/broker.rs`, `adapters/kafka/src/codec.rs`,
+      `adapters/kafka/src/server.rs` + TCP integration tests in
+      `adapters/kafka/tests/integration.rs` and a `cargo fuzz` target in
+      `adapters/kafka/fuzz/`
+- [x] Kafka consumer group management (offsets, rebalancing) via Stream Router —
+      JoinGroup/SyncGroup/Heartbeat/LeaveGroup + OffsetCommit/OffsetFetch in
+      `adapters/kafka/src/broker.rs`
+- [x] AMQP 0-9-1 "Lite" adapter: Exchanges/Bindings/Queues → Graph Router and Queue
+      primitive — `adapters/amqp/src/broker.rs`, `adapters/amqp/src/codec.rs`,
+      `adapters/amqp/src/server.rs` (connection/channel lifecycle, exchange/queue
+      declare, binding, basic.publish/consume/get/ack) + TCP integration tests in
+      `adapters/amqp/tests/integration.rs` and a `cargo fuzz` target in
+      `adapters/amqp/fuzz/`. The canonical out-of-process `pika` client suite
+      remains a tracked follow-up in `conformance/harness/src/lib.rs`.
+- [x] Explicitly out of scope for the Lite adapter: distributed XA transactions,
+      complex message prioritization — documented in `adapters/amqp/src/lib.rs`
+- [x] Populate the Phase 0 conformance harness with in-repo wire-roundtrip
+      suites for Kafka and AMQP (`kafka_wire_roundtrip`, `amqp_wire_roundtrip` in
+      `conformance/harness/src/lib.rs`, driving each adapter's public
+      codec/broker over a real TCP socket) plus feature-gated (`rdkafka`,
+      `lapin`), `#[ignore]`d hooks for the canonical `librdkafka`/`lapin`/`pika`
+      client suites; extended [conformance/COMPATIBILITY.md](conformance/COMPATIBILITY.md)
+      to cover the Kafka and AMQP adapters. Actually running the real
+      `librdkafka`/`lapin`/`pika` clients against a live broker remains a
+      tracked follow-up (`cargo test --features rdkafka,lapin -- --ignored`).
 - [ ] **Milestone:** tpt-synapse can fully replace Kafka and RabbitMQ for backend
-      data pipelines and task queues
+      data pipelines and task queues — Kafka and AMQP adapters both exist with
+      in-repo TCP integration + wire-roundtrip tests and a published
+      compatibility matrix; actually exercising the out-of-process
+      `librdkafka`/`lapin`/`pika` suites is the remaining gap before this
+      milestone is declared
 
 ## Phase 4 — Clustering, Consensus & Control Plane (spec.txt §6 Phase 4)
 
@@ -133,24 +161,41 @@ security review, client SDKs with no existing ecosystem) that pays off as a clea
 more efficient interface once the core is proven, not the way tpt-synapse first
 becomes usable.
 
-- [ ] Wire framing: self-describing fixed header (no outer length prefix), modeled
-      on `.tptmq` (see Design Reference Notes)
-- [ ] AEAD encryption on every frame by default — no unencrypted-frame carve-out
-- [ ] CRC pre-auth integrity filter ahead of AEAD decrypt
-- [ ] AAD-bound plaintext header fields (tampered header fails authentication)
-- [ ] Boot-salt + monotonic-counter nonce construction; epoch-based key rotation
-      (`key_id`)
+- [x] Wire framing: self-describing fixed header (no outer length prefix), modeled
+      on `.tptmq` (see Design Reference Notes) — `adapters/native/src/lib.rs`
+      (`Codec::encode`/`decode`)
+- [x] AEAD encryption on every frame by default — no unencrypted-frame carve-out
+      — ChaCha20-Poly1305 in `adapters/native/src/lib.rs`
+- [x] CRC pre-auth integrity filter ahead of AEAD decrypt — `flags::HAS_CRC`,
+      rejected via `NativeError::CrcMismatch` before any decrypt is attempted
+- [x] AAD-bound plaintext header fields (tampered header fails authentication)
+      — header bytes passed as AEAD `aad`; covered by
+      `tampered_header_fails_auth` test
+- [x] Boot-salt + monotonic-counter nonce construction; epoch-based key rotation
+      (`key_id`) — `KeyRing` indexed by `key_id` epoch, `last_counter`
+      high-water-mark replay check (`replay_rejected` test)
 - [ ] Unified command set over one connection: pub/sub (topic match), log
       tailing/consumer groups (streaming), queue+ack (task work), KV get/set with TTL
-      — directly against Log/Queue/Map, no per-protocol translation layer
-- [ ] Native client SDK: Rust, plus at least one other language binding
-- [ ] Replace `.tptmq`'s symmetric-only REKEY (a frame authenticated under the
+      — directly against Log/Queue/Map, no per-protocol translation layer.
+      `Opcode` variants (PubSub/LogTail/Queue/KvGet/KvSet/Ack) and frame
+      round-tripping exist, but `echo_broker` in `adapters/native/src/lib.rs` is
+      an in-memory stand-in — it is not yet wired to the real `Log`/`Queue`/`Map`
+      primitives.
+- [ ] Native client SDK: Rust, plus at least one other language binding — the
+      wire codec exists but there is no standalone client SDK crate/package yet
+- [x] Replace `.tptmq`'s symmetric-only REKEY (a frame authenticated under the
       *current* key, which a compromised key can forge or block) with an
       asymmetric rekey handshake — e.g. X25519 key agreement signed by a separate
       long-lived provisioning key — so a compromised session key can't also forge
-      its own rotation
+      its own rotation — `adapters/native/src/lib.rs`'s `handshake` module
+      (X25519 ECDH + HKDF-SHA256, `x25519_handshake_derives_shared_key` test);
+      not yet wired into a live connection-establishment flow
 - [ ] **Milestone:** a native client drives all four data primitives over one
-      connection, with wire-level tests proving frame integrity and replay-rejection
+      connection, with wire-level tests proving frame integrity and
+      replay-rejection — frame integrity/replay/tamper tests exist and pass
+      over a real TCP socket (`adapters/native/src/lib.rs` test suite), but the
+      opcodes aren't yet wired to the real primitives (see above), so this
+      milestone isn't complete
 
 ## Adoption & Tooling (new)
 

@@ -4,8 +4,8 @@
 //! [WHERE <expr>]` and evaluate the predicate against a per-message
 //! [`Context`] (field -> value). Supports `AND`/`OR`/`NOT`, comparisons
 //! (`=`, `!=`, `<`, `>`, `<=`, `>=`, `LIKE`) over string/number operands, and
-//! `%`/`_` SQL wildcards in `LIKE`. This is intentionally small — the WASM
-//! transform track (TODO.md) is the escape hatch for untrusted, heavier logic.
+//! `%`/`_` SQL wildcards in `LIKE`. This is intentionally small —
+//! [`crate::wasm_transform`] is the escape hatch for untrusted, heavier logic.
 
 use std::collections::HashMap;
 

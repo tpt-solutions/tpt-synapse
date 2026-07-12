@@ -6,3 +6,25 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+synapse-core = { path = "../../core" }
+synapse-adapter-kafka = { path = "../../adapters/kafka" }
+synapse-adapter-amqp = { path = "../../adapters/amqp" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+# Canonical third-party client libraries for the out-of-process conformance
+# suites. All optional so the default build stays green everywhere; enable with
+# `--features rdkafka,lapin` (or `redis`, `paho`) and run `--ignored`.
+[dependencies.rdkafka]
+version = "0.36"
+optional = true
+
+[dependencies.lapin]
+version = "2"
+optional = true
+
+[features]
+default = []
+rdkafka = ["dep:rdkafka"]
+lapin = ["dep:lapin"]

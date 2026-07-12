@@ -55,10 +55,8 @@ impl Queue {
     }
 
     /// Enqueue a payload. Returns the assigned sequence number. Durable.
+    /// Empty payloads are permitted (e.g. AMQP allows zero-length bodies).
     pub fn enqueue(&self, payload: &[u8]) -> EngineResult<u64> {
-        if payload.is_empty() {
-            return Err(EngineError::invalid_argument("empty payload"));
-        }
         // WAL write provides durability; the in-memory deque is the hot index.
         self._wal.append(payload)?;
         let seq = self.seq.fetch_add(1, Ordering::SeqCst);

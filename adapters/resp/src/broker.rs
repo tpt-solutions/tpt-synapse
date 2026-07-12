@@ -229,7 +229,8 @@ impl RespBroker {
             self.router
                 .subscribers()
                 .into_iter()
-                .filter(|s| s == conn_id)
+                .filter(|s| &**s == conn_id)
+                .map(|s| (*s).to_string())
                 .collect()
         } else {
             channels
@@ -265,10 +266,10 @@ impl RespBroker {
         let mut seen = std::collections::HashSet::new();
         let mut delivered = 0i64;
         for sub in subs {
-            if !seen.insert(sub.clone()) {
+            if !seen.insert(sub.to_string()) {
                 continue;
             }
-            if let Some(tx) = clients.get(&sub) {
+            if let Some(tx) = clients.get(&*sub) {
                 let frame = Value::Array(vec![
                     Value::bulk(b"message".to_vec()),
                     Value::bulk(channel.as_bytes().to_vec()),

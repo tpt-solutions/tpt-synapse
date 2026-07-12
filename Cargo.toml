@@ -7,6 +7,7 @@ members = [
     "adapters/kafka",
     "adapters/amqp",
     "adapters/resp",
+    "adapters/native",
     "conformance/harness",
 ]
 

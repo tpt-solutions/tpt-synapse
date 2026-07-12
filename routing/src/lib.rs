@@ -7,6 +7,8 @@
 //!   (Kafka).
 //! * [`graph`] — exchange/binding/queue routing (AMQP "Lite").
 //! * [`rule`] — an embedded SQL-like rule engine for filter/route/transform.
+//! * [`wasm_transform`] — sandboxed WASM transform plugins for untrusted
+//!   per-tenant logic that doesn't fit the rule engine's `WHERE` predicates.
 //!
 //! One shared [`backpressure`] signal gives every adapter a single internal
 //! representation to translate to/from (MQTT inflight windows, Kafka
@@ -17,6 +19,7 @@ pub mod graph;
 pub mod rule;
 pub mod stream;
 pub mod topic;
+pub mod wasm_transform;
 
 use std::fmt;
 

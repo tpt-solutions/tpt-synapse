@@ -8,4 +8,4 @@ publish.workspace = true
 [dependencies]
 synapse-core = { path = "../core" }
 bytes = { workspace = true }
-wasmtime = { version = "46", default-features = false, features = ["cranelift", "runtime"] }
+wasmtime = { version = "46", default-features = false, features = ["cranelift", "runtime", "wat"] }

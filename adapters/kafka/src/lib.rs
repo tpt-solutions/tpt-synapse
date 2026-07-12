@@ -1,16 +1,14 @@
-//! Kafka wire protocol adapter: produce/fetch → Log writes/reads (spec.txt §6 Phase 3).
+//! Kafka wire protocol adapter: produce/fetch → Log writes/reads and consumer
+//! group management (spec.txt §6 Phase 3). Turns the unified storage core into
+//! a wire-compatible Kafka broker. Run it with [`server::serve`] over TCP.
 //!
-//! `parse` is the untrusted-input entry point fuzzed by `fuzz/fuzz_targets/parse.rs`.
-//! It's a no-op stub until the real frame parser lands in Phase 3.
+//! [`parse`] is the untrusted-input entry point fuzzed by
+//! `fuzz/fuzz_targets/parse.rs`.
 
-pub fn parse(_input: &[u8]) {}
+pub mod broker;
+pub mod codec;
+pub mod server;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_does_not_panic_on_empty_input() {
-        parse(&[]);
-    }
-}
+pub use broker::Broker;
+pub use codec::{decode_request, parse, ApiKey, Frame, ProtocolError};
+pub use server::serve;
