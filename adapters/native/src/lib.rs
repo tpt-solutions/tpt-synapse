@@ -34,7 +34,7 @@ use chacha20poly1305::ChaCha20Poly1305;
 use crc32fast::Hasher as CrcHasher;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use synapse_core::{Log, Map, Queue, SynapseCore};
+use synapse_core::SynapseCore;
 use synapse_routing::stream::StreamRouter;
 use synapse_routing::topic::{topic_matches, TopicRouter};
 
@@ -193,7 +193,9 @@ impl Codec {
         // tampered header fails authentication even though it isn't encrypted.
         let mut nonce = [0u8; NONCE_LEN];
         nonce[..SALT_LEN].copy_from_slice(&self.salt);
-        nonce[SALT_LEN..].copy_from_slice(&frame.counter.to_be_bytes());
+        let mut ctr = [0u8; 8];
+        ctr[4..].copy_from_slice(&frame.counter.to_be_bytes());
+        nonce[SALT_LEN..].copy_from_slice(&ctr);
 
         let key = self.keyring.key(frame.key_id).expect("active key must exist");
         let cipher = ChaCha20Poly1305::new(key.into());
@@ -267,7 +269,9 @@ impl Codec {
 
         let mut nonce = [0u8; NONCE_LEN];
         nonce[..SALT_LEN].copy_from_slice(&self.salt);
-        nonce[SALT_LEN..].copy_from_slice(&counter.to_be_bytes());
+        let mut ctr = [0u8; 8];
+        ctr[4..].copy_from_slice(&counter.to_be_bytes());
+        nonce[SALT_LEN..].copy_from_slice(&ctr);
 
         let key = self.keyring.key(key_id)?;
         let cipher = ChaCha20Poly1305::new(key.into());
@@ -311,11 +315,11 @@ pub mod handshake {
 
     impl ProvisioningKey {
         pub fn generate() -> Self {
-            let secret = EphemeralSecret::random_from_rng(rand::thread_rng());
+            let secret = StaticSecret::random_from_rng(rand::thread_rng());
             let public = PublicKey::from(&secret);
             Self {
                 public,
-                secret: secret.as_ref().try_into().expect("32-byte secret"),
+                secret: secret.to_bytes(),
             }
         }
 
@@ -698,7 +702,7 @@ fn parse_kv(p: &[u8]) -> (String, u64, Vec<u8>) {
 }
 
 /// Read a `len(2) || str` starting at `*cur`, advancing the cursor.
-fn take_str(p: &[u8], cur: &mut usize) -> (String, &[u8]) {
+fn take_str<'a>(p: &'a [u8], cur: &mut usize) -> (String, &'a [u8]) {
     let l = u16::from_be_bytes([p[*cur], p[*cur + 1]]) as usize;
     *cur += 2;
     let s = String::from_utf8_lossy(&p[*cur..*cur + l]).into_owned();
@@ -756,8 +760,10 @@ mod tests {
         };
         let mut wire = Vec::new();
         codec.encode(&frame, &mut wire);
-        // Flip a header byte (opcode) — AAD-bound, so auth must fail.
-        wire[4] ^= 0xFF;
+        // Flip a counter byte in the header — AAD-bound, so authentication must
+        // fail. (The opcode byte is validated structurally before decrypt, so we
+        // tamper the counter to exercise the AEAD/AAD layer specifically.)
+        wire[8] ^= 0xFF;
         let mut dec = Codec::new([9, 9, 9, 9], keyring());
         dec.set_crc(false);
         let mut buf = wire;
@@ -805,6 +811,7 @@ mod tests {
         stream: TcpStream,
         codec: Codec,
         counter: u32,
+        buf: Vec<u8>,
     }
 
     impl TestClient {
@@ -814,6 +821,7 @@ mod tests {
                 stream,
                 codec,
                 counter: 0,
+                buf: Vec::new(),
             }
         }
 
@@ -835,17 +843,18 @@ mod tests {
             self.recv().await
         }
 
-        /// Read the next inbound frame (used for unsolicited pub/sub deliveries).
+        /// Read the next inbound frame (used for unsolicited pub/sub
+        /// deliveries). The receive buffer persists across calls so pipelined
+        /// frames coalesced into one TCP read aren't lost.
         async fn recv(&mut self) -> Frame {
-            let mut buf = Vec::new();
             let mut tmp = [0u8; 8192];
             loop {
-                if let Some(f) = self.codec.decode(&mut buf).unwrap() {
+                if let Some(f) = self.codec.decode(&mut self.buf).unwrap() {
                     return f;
                 }
                 let n = self.stream.read(&mut tmp).await.unwrap();
                 assert!(n > 0, "server closed connection prematurely");
-                buf.extend_from_slice(&tmp[..n]);
+                self.buf.extend_from_slice(&tmp[..n]);
             }
         }
     }
@@ -930,8 +939,8 @@ mod tests {
         let delivery = cli.recv().await;
         assert_eq!(delivery.opcode, Opcode::PubSub);
         assert_eq!(delivery.payload[0], 2); // delivery marker
-        assert_eq!(&delivery.payload[3..12], b"sensors/temp");
-        assert_eq!(&delivery.payload[12..], b"21.5");
+        assert_eq!(&delivery.payload[3..15], b"sensors/temp");
+        assert_eq!(&delivery.payload[15..], b"21.5");
 
         // --- Log tailing + consumer group, against the Log + StreamRouter. --
         let created = cli
@@ -943,6 +952,7 @@ mod tests {
             .await;
         assert_eq!(append.payload[0], 1);
         let mut consume = Vec::new();
+        consume.extend_from_slice(&2u16.to_be_bytes());
         consume.extend_from_slice(b"g1");
         consume.extend_from_slice(&10u32.to_be_bytes());
         let tail = cli.exchange(Opcode::LogTail, named(1, "events", &consume)).await;

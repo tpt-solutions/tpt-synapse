@@ -7,13 +7,22 @@ publish.workspace = true
 
 [dependencies]
 tokio = { workspace = true }
-openraft = { workspace = true }
+openraft = { workspace = true, optional = true }
 bytes = { workspace = true }
 prometheus = "0.13"
 
 [dev-dependencies]
 criterion = "0.5"
 synapse-routing = { path = "../routing" }
+
+[features]
+default = []
+# Linux io_uring network I/O backend (tokio-uring). Off by default so the
+# crate builds everywhere; enable on Linux to serve the TCP accept path via
+# io_uring.
+io-uring = []
+# Embedded Raft consensus (openraft) for multi-node HA + log replication.
+consensus = ["dep:openraft"]
 
 [[bench]]
 name = "routing_bench"

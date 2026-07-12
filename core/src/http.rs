@@ -12,11 +12,19 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 use crate::error::{EngineError, EngineResult};
+use crate::io_uring::accept_loop_tokio;
 use crate::metrics::Metrics;
 
 /// Bind a TCP listener and serve `/metrics` (any other path gets 404) until
 /// the returned task is aborted. Returns the bound address (useful when
 /// `addr`'s port is 0, e.g. in tests) and the server's join handle.
+///
+/// The accept loop runs on the shared async I/O accept-loop abstraction in
+/// `io_uring.rs` (see [`crate::io_uring::current`] for backend selection:
+/// `tokio` everywhere, or `io_uring` on Linux with the `io-uring` feature).
+/// Adapters share this same accept-loop shape, so the data plane's network
+/// backend is a single build-time decision rather than something each protocol
+/// re-implements.
 pub async fn spawn_metrics_server(
     addr: SocketAddr,
     metrics: Arc<Metrics>,
@@ -28,18 +36,12 @@ pub async fn spawn_metrics_server(
         .local_addr()
         .map_err(|e| EngineError::internal(format!("metrics listener local_addr: {e}")))?;
 
-    let handle = tokio::spawn(async move {
-        loop {
-            let (socket, _) = match listener.accept().await {
-                Ok(pair) => pair,
-                Err(_) => continue,
-            };
-            let metrics = metrics.clone();
-            tokio::spawn(async move {
-                let _ = handle_connection(socket, metrics).await;
-            });
+    let handle = tokio::spawn(accept_loop_tokio(listener, move |socket| {
+        let metrics = metrics.clone();
+        async move {
+            let _ = handle_connection(socket, metrics).await;
         }
-    });
+    }));
 
     Ok((local_addr, handle))
 }

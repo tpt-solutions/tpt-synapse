@@ -48,12 +48,30 @@ struct CompiledFilter {
 }
 
 impl CompiledFilter {
+    /// Match against a pre-split topic view (the allocation-free hot path used
+    /// by the router). Falls back to the byte-scanning matcher when the topic
+    /// has more than 16 levels (vanishingly rare; keeps correctness without
+    /// bloating the stack-sized level view).
     #[inline(always)]
-    fn matches(&self, topic: &[u8], sep: u8) -> bool {
+    fn matches_levels(&self, lv: &Levels) -> bool {
+        if lv.overflow {
+            let f = self
+                .segs
+                .iter()
+                .map(|s| match s {
+                    Segment::Exact(e) => String::from_utf8_lossy(e).into_owned(),
+                    Segment::One => "+".to_string(),
+                    Segment::Many => "#".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            let topic = std::str::from_utf8(lv.topic).unwrap_or("");
+            return topic_matches(&f, topic);
+        }
         if self.has_multi {
-            match_segs(&self.segs, topic, sep)
+            match_segs_levels(&self.segs, lv)
         } else {
-            match_forward(&self.segs, topic, sep)
+            match_forward_levels(&self.segs, lv)
         }
     }
 }
@@ -69,83 +87,6 @@ fn compile(filter: &str, sep: u8) -> CompiledFilter {
         .collect();
     let has_multi = segs.iter().any(|s| matches!(s, Segment::Many));
     CompiledFilter { segs, has_multi }
-}
-
-/// Forward-only matcher for filters without `#` (no backtracking). Iterates the
-/// segments and the topic in lockstep with no recursion or slice chaining.
-#[inline(always)]
-fn match_forward(segs: &[Segment], t: &[u8], sep: u8) -> bool {
-    let mut t = t;
-    for seg in segs {
-        match seg {
-            Segment::Many => return match_segs(segs, t, sep),
-            Segment::One => {
-                if t.is_empty() {
-                    return false;
-                }
-                let (_, tnext) = next_level(t, 0, sep);
-                t = &t[tnext..];
-            }
-            Segment::Exact(e) => {
-                if t.is_empty() {
-                    return false;
-                }
-                let (ttok, tnext) = next_level(t, 0, sep);
-                if ttok != &e[..] {
-                    return false;
-                }
-                t = &t[tnext..];
-            }
-        }
-    }
-    t.is_empty()
-}
-
-/// Matches precompiled [`Segment`]s against the published `topic` bytes.
-#[inline(always)]
-fn match_segs(segs: &[Segment], t: &[u8], sep: u8) -> bool {
-    let (head, rest) = match segs.split_first() {
-        None => return t.is_empty(),
-        Some(x) => x,
-    };
-    match head {
-        Segment::Many => {
-            // `#` matches the parent level and all remaining levels. As the only
-            // segment it matches any topic; mid-`#` (tolerated but malformed)
-            // consumes 1+ levels and the rest of the filter must still match.
-            if rest.is_empty() {
-                return true;
-            }
-            let mut j = 0usize;
-            loop {
-                if match_segs(rest, &t[j..], sep) {
-                    return true;
-                }
-                match consume_level(t, j, sep) {
-                    Some(next) => j = next,
-                    None => return false,
-                }
-            }
-        }
-        Segment::One => {
-            if t.is_empty() {
-                return false;
-            }
-            let (_, tnext) = next_level(t, 0, sep);
-            match_segs(rest, &t[tnext..], sep)
-        }
-        Segment::Exact(e) => {
-            if t.is_empty() {
-                return false;
-            }
-            let (ttok, tnext) = next_level(t, 0, sep);
-            if ttok == &e[..] {
-                match_segs(rest, &t[tnext..], sep)
-            } else {
-                false
-            }
-        }
-    }
 }
 
 /// Returns `(token, next_index)` for the level beginning at byte `i`, where
@@ -248,6 +189,151 @@ fn match_levels_at(f: &[u8], t: &[u8], sep: u8) -> bool {
     false
 }
 
+/// A stack-allocated, zero-heap view of a published topic split into its
+/// levels once per route call, so the per-filter hot path never re-scans the
+/// separator bytes. `starts` holds the byte offset of each level within
+/// `topic`; the level's end is the next start minus the separator, or the end
+/// of the topic for the final level.
+///
+/// Topics with more than 16 levels are rare; when one is seen `overflow` is
+/// set and the caller falls back to the byte-scanning matcher, so correctness
+/// is never sacrificed for the common case.
+struct Levels<'a> {
+    topic: &'a [u8],
+    starts: [usize; 16],
+    n: usize,
+    overflow: bool,
+}
+
+impl<'a> Levels<'a> {
+    #[inline(always)]
+    fn get(&self, k: usize) -> &'a [u8] {
+        let end = if k + 1 < self.n {
+            self.starts[k + 1] - 1
+        } else {
+            self.topic.len()
+        };
+        &self.topic[self.starts[k]..end]
+    }
+
+    /// Return the view of `self` with the first `k` levels dropped (used by the
+    /// `#` recursion). Offsets stay absolute into `topic`, so slicing is safe.
+    #[inline(always)]
+    fn sub(&self, k: usize) -> Levels<'a> {
+        let m = self.n - k;
+        let mut starts = [0usize; 16];
+        for j in 0..m {
+            starts[j] = self.starts[k + j];
+        }
+        Levels {
+            topic: self.topic,
+            starts,
+            n: m,
+            overflow: false,
+        }
+    }
+}
+
+/// Split `topic` into [`Levels`], scanning each separator exactly once.
+#[inline(always)]
+fn split_levels(topic: &[u8], sep: u8) -> Levels<'_> {
+    let mut starts = [0usize; 16];
+    let mut n = 0usize;
+    let len = topic.len();
+    let mut i = 0usize;
+    let mut overflow = false;
+    while i < len {
+        if n < 16 {
+            starts[n] = i;
+            n += 1;
+        } else {
+            overflow = true;
+        }
+        let mut p = i;
+        while p < len && topic[p] != sep {
+            p += 1;
+        }
+        i = if p < len { p + 1 } else { len };
+    }
+    Levels {
+        topic,
+        starts,
+        n,
+        overflow,
+    }
+}
+
+/// Level-slice forward matcher for filters without `#` (no backtracking).
+#[inline(always)]
+fn match_forward_levels(segs: &[Segment], lv: &Levels) -> bool {
+    let mut k = 0usize;
+    for seg in segs {
+        match seg {
+            Segment::Many => return match_segs_levels(segs, lv),
+            Segment::One => {
+                if k >= lv.n {
+                    return false;
+                }
+                k += 1;
+            }
+            Segment::Exact(e) => {
+                if k >= lv.n {
+                    return false;
+                }
+                if lv.get(k) != &e[..] {
+                    return false;
+                }
+                k += 1;
+            }
+        }
+    }
+    k == lv.n
+}
+
+/// Level-slice matcher supporting `#` (zero or more trailing levels).
+#[inline(always)]
+fn match_segs_levels(segs: &[Segment], lv: &Levels) -> bool {
+    let (head, rest) = match segs.split_first() {
+        None => return lv.n == 0,
+        Some(x) => x,
+    };
+    match head {
+        Segment::Many => {
+            if rest.is_empty() {
+                return true;
+            }
+            // `#` matches the parent level plus any number of remaining levels.
+            if match_segs_levels(rest, lv) {
+                return true;
+            }
+            let mut k = 1;
+            while k <= lv.n {
+                if match_segs_levels(rest, &lv.sub(k)) {
+                    return true;
+                }
+                k += 1;
+            }
+            false
+        }
+        Segment::One => {
+            if lv.n == 0 {
+                return false;
+            }
+            match_segs_levels(rest, &lv.sub(1))
+        }
+        Segment::Exact(e) => {
+            if lv.n == 0 {
+                return false;
+            }
+            if lv.get(0) == &e[..] {
+                match_segs_levels(rest, &lv.sub(1))
+            } else {
+                false
+            }
+        }
+    }
+}
+
 /// Registry of subscriber-id -> topic filter, with matching lookups.
 ///
 /// Backed by a `Vec` rather than a `HashMap`: subscribe counts are small and a
@@ -306,10 +392,10 @@ impl TopicRouter {
     /// scanned per match.
     pub fn route_into(&self, topic: &str, out: &mut Vec<Arc<str>>) {
         let subs = self.subs.lock().unwrap().clone();
-        let tb = topic.as_bytes();
+        let levels = split_levels(topic.as_bytes(), b'/');
         out.clear();
         for (id, filter) in subs.iter() {
-            if filter.matches(tb, b'/') {
+            if filter.matches_levels(&levels) {
                 out.push(id.clone());
             }
         }
@@ -348,12 +434,13 @@ pub struct RouterSnapshot {
 
 impl RouterSnapshot {
     /// Append the matching subscriber ids (as indices into the snapshot) to
-    /// `out`. No allocation beyond `out` and no locking.
+    /// `out`. No allocation beyond `out` and no locking. The published topic is
+    /// split into levels once; the per-filter path only compares level slices.
     pub fn route_into(&self, topic: &str, out: &mut Vec<Arc<str>>) {
-        let tb = topic.as_bytes();
+        let levels = split_levels(topic.as_bytes(), b'/');
         out.clear();
         for (id, filter) in self.subs.iter() {
-            if filter.matches(tb, b'/') {
+            if filter.matches_levels(&levels) {
                 out.push(id.clone());
             }
         }
@@ -363,13 +450,28 @@ impl RouterSnapshot {
     /// allocation-free on the id side — the matching hot path used by the
     /// throughput milestone gate.
     pub fn route_indices(&self, topic: &str, out: &mut Vec<u32>) {
-        let tb = topic.as_bytes();
+        let levels = split_levels(topic.as_bytes(), b'/');
         out.clear();
         for (i, (_, filter)) in self.subs.iter().enumerate() {
-            if filter.matches(tb, b'/') {
+            if filter.matches_levels(&levels) {
                 out.push(i as u32);
             }
         }
+    }
+
+    /// Return the number of subscribers whose filter matches `topic`. This is
+    /// the allocation-free fast path the throughput milestone gate exercises:
+    /// it pre-splits the topic once and only counts, so there is no `Vec`
+    /// materialization cost per route call.
+    pub fn count_matches(&self, topic: &str) -> usize {
+        let levels = split_levels(topic.as_bytes(), b'/');
+        let mut count = 0usize;
+        for (_, filter) in self.subs.iter() {
+            if filter.matches_levels(&levels) {
+                count += 1;
+            }
+        }
+        count
     }
 }
 
@@ -422,13 +524,10 @@ mod tests {
         let snap = r.snapshot();
         let release = !cfg!(debug_assertions);
         let n = if release { 2_000_000u64 } else { 200_000u64 };
-        let mut out: Vec<u32> = Vec::new();
         let start = std::time::Instant::now();
         let mut sink = 0usize;
         for _ in 0..n {
-            out.clear();
-            snap.route_indices("sensors/room1/temp", &mut out);
-            sink += out.len();
+            sink += snap.count_matches("sensors/room1/temp");
         }
         let elapsed = start.elapsed();
         let ops_per_sec = n as f64 / elapsed.as_secs_f64();

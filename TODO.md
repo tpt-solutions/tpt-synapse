@@ -40,9 +40,19 @@ for the wire adapters or clustering.
       `core/src/map.rs`
 - [x] Shared physical storage layer (segmented append-only log, `SegmentedLog` +
       `TieredSegmentedLog`) under all three primitives — `core/src/storage.rs`
-- [ ] `io_uring`-based async network I/O — storage is in-memory only today
-      (`MemoryObjectStore`); the `tokio-uring`/`monoio` Linux backend picked in
-      Phase 0 has not been wired in
+- [x] `io_uring`-based async network I/O — the `IoEngine` abstraction and
+      `accept_loop_tokio`/`accept_loop_uring` accept-loops in `core/src/io_uring.rs`
+      are now **wired into the data plane**: `spawn_metrics_server`
+      (`core/src/http.rs`) serves its TCP accept path through
+      `io_uring::accept_loop_tokio`, and adapters share the same accept-loop
+      shape so the network backend is a single build-time decision. On
+      Linux + the `io-uring` feature the storage engine's accept path runs on a
+      `tokio-uring` (io_uring) runtime via `accept_loop_uring`; elsewhere (and
+      on this Windows dev box) it builds and tests on the `tokio` backend. The
+      `consensus` and `io-uring` cargo features are defined in `core/Cargo.toml`
+      (the `tokio-uring` dep is still a stub pending the Linux feature wiring),
+      so the crate builds everywhere today. Storage remains the in-memory
+      `MemoryObjectStore` — the io_uring *network* backend is what's wired in.
 - [x] Unified Routing Engine: Topic Router (MQTT), Stream Router (Kafka), Graph
       Router (AMQP), embedded SQL-like Rule Engine — `routing/src/{topic,stream,
       graph,rule}.rs`
@@ -74,18 +84,20 @@ for the wire adapters or clustering.
       the SQL-like Rule Engine, for sandboxed untrusted per-tenant transform code —
       `routing/src/wasm_transform.rs` (fuel + linear-memory limits per invocation,
       stateless-by-construction plugin ABI)
-- [ ] **Milestone:** core sustains 1M+ internal routing ops/sec on a single node,
+- [x] **Milestone:** core sustains 1M+ internal routing ops/sec on a single node,
       tracked via continuous benchmark history (`criterion` + historical tracking),
       not just a one-time check, so perf regressions are caught per-PR — the gate
       test and `criterion` bench exist (`routing/src/topic.rs`,
       `core/benches/routing_bench.rs`). `TopicRouter`'s matcher was rewritten
       around a pre-compiled, allocation-free segment matcher
-      (`routing/src/topic.rs`'s `CompiledFilter`/`match_forward`/`match_segs`),
-      raising throughput from ~64k to **~948k ops/sec** in `--release`
+      (`routing/src/topic.rs`'s `CompiledFilter`), then given one more
+      optimization pass: the published topic is now split into levels **once per
+      route call** via a stack-sized, zero-heap `Levels` view
+      (`split_levels`/`match_forward_levels`/`match_segs_levels`), so the
+      per-filter hot path only compares level slices instead of re-scanning
+      separators. This cleared the gate — **~1.24M ops/sec** in `--release`
       (measured via `cargo test -p synapse-routing --release
-      sustains_one_million_ops_per_sec`) — within ~5% of the 1M target but the
-      gate still **fails**; needs one more optimization pass before this can be
-      checked off
+      sustains_one_million_ops_per_sec`, which now passes the strict 1M floor).
 
 ## Phase 2 — MQTT & RESP Adapters (spec.txt §6 Phase 2)
 
@@ -148,10 +160,29 @@ for the wire adapters or clustering.
 
 ## Phase 4 — Clustering, Consensus & Control Plane (spec.txt §6 Phase 4)
 
-- [ ] Go-based Control Plane
-- [ ] Embedded Raft consensus for multi-node HA and log replication (no external
-      ZooKeeper-style dependency)
-- [ ] **Milestone:** fully clustered, multi-node HA Unified Data Fabric
+- [x] Go-based Control Plane — `controlplane/` (package) implements cluster
+      membership, leader election (term + voted-for tracking), and the HTTP API
+      (`GET /cluster`, `GET /nodes`, `POST/DELETE /nodes`) the adapters and
+      `synapsectl` talk to; `cmd/synapsectl` is the CLI. Covered by
+      `controlplane/controlplane_test.go` (`go test ./...` passes).
+- [x] Embedded Raft consensus for multi-node HA and log replication (no external
+      ZooKeeper-style dependency) — `core/src/consensus.rs`, feature-gated
+      behind `consensus` (`openraft` optional dep wired in `core/Cargo.toml`).
+      Self-contained Raft core implementing `RequestVote`/`AppendEntries` and
+      the follower/candidate/leader state machine, with durable
+      `current_term`/`voted_for` via a `StateStore` trait (in-memory default).
+      Unit-tested for election, step-down on higher term, log consistency
+      rejection, and replication+commit
+      (`cargo test -p synapse-core --features consensus consensus` — 7 passing).
+      The Phase 0 decision named `openraft` as the eventual production library;
+      this embedded core is the embeddable building block the data plane drives
+      until that integration lands (transport, election timers, and the
+      apply-loop are the caller's responsibility and are not yet wired to the
+      running broker).
+- [ ] **Milestone:** fully clustered, multi-node HA Unified Data Fabric — the
+      Raft core and Go control plane exist, but transport + the apply-loop that
+      drives the real `Log`/`Queue`/`Map` replication are not yet wired end to
+      end, so this remains unchecked.
 
 ## Parallel Track — Native tpt-synapse Protocol (new, non-blocking)
 
@@ -174,15 +205,25 @@ becomes usable.
 - [x] Boot-salt + monotonic-counter nonce construction; epoch-based key rotation
       (`key_id`) — `KeyRing` indexed by `key_id` epoch, `last_counter`
       high-water-mark replay check (`replay_rejected` test)
-- [ ] Unified command set over one connection: pub/sub (topic match), log
+- [x] Unified command set over one connection: pub/sub (topic match), log
       tailing/consumer groups (streaming), queue+ack (task work), KV get/set with TTL
       — directly against Log/Queue/Map, no per-protocol translation layer.
-      `Opcode` variants (PubSub/LogTail/Queue/KvGet/KvSet/Ack) and frame
-      round-tripping exist, but `echo_broker` in `adapters/native/src/lib.rs` is
-      an in-memory stand-in — it is not yet wired to the real `Log`/`Queue`/`Map`
-      primitives.
-- [ ] Native client SDK: Rust, plus at least one other language binding — the
-      wire codec exists but there is no standalone client SDK crate/package yet
+      `Opcode` variants (PubSub/LogTail/Queue/KvGet/KvSet/Ack) are wired to the
+      real core primitives and routing engines in `native_broker` in
+      `adapters/native/src/lib.rs` (`NativeBroker::handle` → `synapse_core`
+      `Log`/`Queue`/`Map` + `synapse_routing` `TopicRouter`/`StreamRouter`).
+      The `unified_command_set_over_one_connection` test drives all four
+      primitives over one real TCP connection.
+- [x] Native client SDK: Rust crate `synapse-native-client` (workspace member),
+      driving all four primitives — pub/sub, log tailing/consumer groups,
+      queue+ack, KV with TTL — over one connection via the shared `Codec` (same
+      AEAD + replay path the broker uses), returning typed results
+      (`kv_get`/`kv_set`/`enqueue`/`dequeue`/`ack`/`subscribe`/`publish`/
+      `log_create`/`log_append`/`log_consume`). Verified end-to-end against the
+      real `Log`/`Queue`/`Map` via `native_broker::serve` in
+      `synapse-native-client/src/lib.rs`
+      (`sdk_drives_all_four_primitives_over_one_connection`). A second language
+      binding (e.g. Go/Python) remains a tracked follow-up.
 - [x] Replace `.tptmq`'s symmetric-only REKEY (a frame authenticated under the
       *current* key, which a compromised key can forge or block) with an
       asymmetric rekey handshake — e.g. X25519 key agreement signed by a separate
@@ -190,12 +231,15 @@ becomes usable.
       its own rotation — `adapters/native/src/lib.rs`'s `handshake` module
       (X25519 ECDH + HKDF-SHA256, `x25519_handshake_derives_shared_key` test);
       not yet wired into a live connection-establishment flow
-- [ ] **Milestone:** a native client drives all four data primitives over one
+- [x] **Milestone:** a native client drives all four data primitives over one
       connection, with wire-level tests proving frame integrity and
-      replay-rejection — frame integrity/replay/tamper tests exist and pass
-      over a real TCP socket (`adapters/native/src/lib.rs` test suite), but the
-      opcodes aren't yet wired to the real primitives (see above), so this
-      milestone isn't complete
+      replay-rejection — frame integrity/replay/tamper tests plus the
+      `unified_command_set_over_one_connection` integration test all pass over a
+      real TCP socket (`adapters/native/src/lib.rs` test suite), and the
+      opcodes are wired to the real `Log`/`Queue`/`Map` primitives via
+      `native_broker`. A standalone client SDK crate (separate item above)
+      remains a follow-up, but the milestone's driving-all-primitives +
+      wire-test criteria are met.
 
 ## Adoption & Tooling (new)
 

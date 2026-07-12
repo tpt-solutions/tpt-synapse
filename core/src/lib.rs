@@ -41,12 +41,16 @@
 pub mod engine;
 pub mod error;
 pub mod http;
+pub mod io_uring;
 pub mod log;
 pub mod map;
 pub mod metrics;
 pub mod queue;
 pub mod storage;
 pub mod tenant;
+
+#[cfg(feature = "consensus")]
+pub mod consensus;
 
 pub use engine::SynapseCore;
 pub use error::{EngineError, EngineResult, ErrorKind};

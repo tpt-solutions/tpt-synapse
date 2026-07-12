@@ -8,6 +8,8 @@ members = [
     "adapters/amqp",
     "adapters/resp",
     "adapters/native",
+    "synapse-native-client",
+    "synapse-studio",
     "conformance/harness",
 ]
 
