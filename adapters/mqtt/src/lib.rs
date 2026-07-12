@@ -1,16 +1,20 @@
-//! MQTT v3.1.1 / v5.0 wire protocol adapter (spec.txt §3.3, §6 Phase 2).
+//! MQTT v3.1.1 wire protocol adapter (spec.txt §3.3, §6 Phase 2).
 //!
-//! `parse` is the untrusted-input entry point fuzzed by `fuzz/fuzz_targets/parse.rs`.
-//! It's a no-op stub until the real frame parser lands in Phase 2.
+//! Turns the unified storage core + routing engine into a wire-compatible
+//! MQTT broker: publishers write to concrete topics, subscribers register
+//! wildcard filters matched by the routing engine, and QoS 1/2 publishes are
+//! durably recorded on the core [`Log`] primitive. Run it with
+//! [`server::serve`] over TCP.
+//!
+//! [`parse`] is the untrusted-input entry point fuzzed by
+//! `fuzz/fuzz_targets/parse.rs`.
 
-pub fn parse(_input: &[u8]) {}
+pub mod broker;
+pub mod codec;
+pub mod server;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_does_not_panic_on_empty_input() {
-        parse(&[]);
-    }
-}
+pub use broker::Broker;
+pub use codec::{
+    decode_packet, encode_packet, parse, Packet, ProtocolError, Publish, QoS, SubAckCode,
+};
+pub use server::serve;

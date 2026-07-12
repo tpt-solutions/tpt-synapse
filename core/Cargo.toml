@@ -9,6 +9,15 @@ publish.workspace = true
 tokio = { workspace = true }
 openraft = { workspace = true }
 bytes = { workspace = true }
+prometheus = "0.13"
+
+[dev-dependencies]
+criterion = "0.5"
+synapse-routing = { path = "../routing" }
+
+[[bench]]
+name = "routing_bench"
+harness = false
 
 # tokio-uring wraps liburing, which only exists on Linux. Keeping the
 # dependency target-gated lets `cargo build`/`cargo test` succeed on any

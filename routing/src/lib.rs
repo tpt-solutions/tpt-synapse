@@ -1,10 +1,54 @@
-//! Unified Routing Engine: Topic Router (MQTT), Stream Router (Kafka),
-//! Graph Router (AMQP), and the embedded SQL-like Rule Engine (spec.txt §3.2).
+//! Unified Routing & Compute Engine (spec.txt §3.2, §6 Phase 1).
 //!
-//! Empty scaffold for Phase 0 — routers land in Phase 1.
+//! Four cooperating pieces sit between the protocol adapters and the storage
+//! core:
+//! * [`topic`] — hierarchical pub/sub matching (MQTT), with `+`/`#` wildcards.
+//! * [`stream`] — consumer groups, partition assignment, and offset tracking
+//!   (Kafka).
+//! * [`graph`] — exchange/binding/queue routing (AMQP "Lite").
+//! * [`rule`] — an embedded SQL-like rule engine for filter/route/transform.
+//!
+//! One shared [`backpressure`] signal gives every adapter a single internal
+//! representation to translate to/from (MQTT inflight windows, Kafka
+//! fetch/produce quotas, AMQP prefetch/credit) — see TODO.md.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {}
+pub mod backpressure;
+pub mod graph;
+pub mod rule;
+pub mod stream;
+pub mod topic;
+
+use std::fmt;
+
+/// Error type for routing-layer operations (rule parse errors, unknown
+/// exchanges, etc.).
+#[derive(Debug, Clone)]
+pub struct RoutingError(pub String);
+
+impl fmt::Display for RoutingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
+
+impl std::error::Error for RoutingError {}
+
+impl From<&str> for RoutingError {
+    fn from(s: &str) -> Self {
+        RoutingError(s.to_string())
+    }
+}
+
+impl From<String> for RoutingError {
+    fn from(s: String) -> Self {
+        RoutingError(s)
+    }
+}
+
+impl RoutingError {
+    pub fn new(s: impl Into<String>) -> Self {
+        RoutingError(s.into())
+    }
+}
+
+pub type RoutingResult<T> = Result<T, RoutingError>;

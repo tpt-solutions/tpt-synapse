@@ -1,8 +1,7 @@
 # tpt-synapse — Development Checklist
 
 Tracks implementation progress against the roadmap in [spec.txt](spec.txt). Check
-items off as they're completed; nothing is checked yet since no code exists in this
-repo beyond the design docs. Wire-compatible protocol adapters (Phases 2-3) come
+items off as they're completed. Wire-compatible protocol adapters (Phases 2-3) come
 first — they're the fastest path to a provable, zero-migration-cost milestone
 ("existing Mosquitto/Kafka/Redis/RabbitMQ clients just work"). A from-scratch native
 protocol is tracked as a non-blocking parallel effort (see below), not a prerequisite
@@ -33,48 +32,77 @@ for the wire adapters or clustering.
 
 ## Phase 1 — Core Engine & Storage (spec.txt §6 Phase 1)
 
-- [ ] **Log** primitive: immutable append-only record sequence (backs Kafka & MQTT
-      QoS 1/2)
-- [ ] **Queue** primitive: mutable FIFO with acknowledgment tracking (backs AMQP &
-      task queues)
-- [ ] **Map** primitive: concurrent in-memory KV store with TTL (backs Redis)
-- [ ] Shared physical storage layer (LSM-tree or segmented append-only logs) under
-      all three primitives
-- [ ] `io_uring`-based async network I/O
-- [ ] Unified Routing Engine: Topic Router (MQTT), Stream Router (Kafka), Graph
-      Router (AMQP), embedded SQL-like Rule Engine
-- [ ] Write down the per-write consistency/durability model (sync vs. async
+- [x] **Log** primitive: immutable append-only record sequence (backs Kafka & MQTT
+      QoS 1/2) — `core/src/log.rs`
+- [x] **Queue** primitive: mutable FIFO with acknowledgment tracking (backs AMQP &
+      task queues) — `core/src/queue.rs`
+- [x] **Map** primitive: concurrent in-memory KV store with TTL (backs Redis) —
+      `core/src/map.rs`
+- [x] Shared physical storage layer (segmented append-only log, `SegmentedLog` +
+      `TieredSegmentedLog`) under all three primitives — `core/src/storage.rs`
+- [ ] `io_uring`-based async network I/O — storage is in-memory only today
+      (`MemoryObjectStore`); the `tokio-uring`/`monoio` Linux backend picked in
+      Phase 0 has not been wired in
+- [x] Unified Routing Engine: Topic Router (MQTT), Stream Router (Kafka), Graph
+      Router (AMQP), embedded SQL-like Rule Engine — `routing/src/{topic,stream,
+      graph,rule}.rs`
+- [x] Write down the per-write consistency/durability model (sync vs. async
       replication, what "committed" means pre-Phase-4, single-node durability
       semantics) before storage engine implementation starts — this constrains
-      the storage engine's design, not just clustering
-- [ ] Design one internal backpressure signal in the Unified Routing Engine that
+      the storage engine's design, not just clustering — documented in
+      `core/src/lib.rs`
+- [x] Design one internal backpressure signal in the Unified Routing Engine that
       each adapter translates to/from (MQTT inflight windows, Kafka fetch/produce
-      quotas, AMQP prefetch/credit all need a shared internal representation)
-- [ ] Tiered storage for the Log primitive: hot local segments + transparent
+      quotas, AMQP prefetch/credit all need a shared internal representation) —
+      `routing/src/backpressure.rs`
+- [x] Tiered storage for the Log primitive: hot local segments + transparent
       offload to S3-compatible object storage for older segments under the same
       read API — the primary cost/scale differentiator modern log-based brokers
-      (Redpanda, WarpStream) use over Kafka
-- [ ] Expose a Prometheus `/metrics` endpoint as a Phase 1 deliverable (throughput,
+      (Redpanda, WarpStream) use over Kafka — `TieredSegmentedLog::offload_sealed`
+      in `core/src/storage.rs`; the real `S3ObjectStore` backend is still a stub
+      pending the `s3`/`aws-sdk-s3` feature
+- [x] Expose a Prometheus `/metrics` endpoint as a Phase 1 deliverable (throughput,
       latency, queue depth) rather than deferring all observability to `tpt-boxcar`
-      eBPF in Phase 4 — this is baseline table stakes for production trust
-- [ ] Multi-tenancy: namespace isolation and per-tenant throughput/storage quotas
+      eBPF in Phase 4 — this is baseline table stakes for production trust —
+      registry + text-exposition rendering (`core/src/metrics.rs`) is now served
+      by a minimal async HTTP listener, `spawn_metrics_server` in
+      `core/src/http.rs`, unit-tested end-to-end over a real TCP connection
+- [x] Multi-tenancy: namespace isolation and per-tenant throughput/storage quotas
       in the storage and routing primitives, cheaper to build in now than retrofit
-      after Phase 3
+      after Phase 3 — `core/src/tenant.rs`
 - [ ] WASM-based transform plugins (via `wasmtime`) as an alternative/addition to
       the SQL-like Rule Engine, for sandboxed untrusted per-tenant transform code
 - [ ] **Milestone:** core sustains 1M+ internal routing ops/sec on a single node,
       tracked via continuous benchmark history (`criterion` + historical tracking),
-      not just a one-time check, so perf regressions are caught per-PR
+      not just a one-time check, so perf regressions are caught per-PR — the gate
+      test and `criterion` bench exist (`routing/src/topic.rs`,
+      `core/benches/routing_bench.rs`) but the gate currently **fails**: measured
+      ~64k ops/sec in `--release` (~15.6k in debug) on `TopicRouter::route`, over
+      an order of magnitude short of the 1M target — needs profiling/optimization
+      before this can be checked off
 
 ## Phase 2 — MQTT & RESP Adapters (spec.txt §6 Phase 2)
 
-- [ ] MQTT adapter (v3.1.1 & v5.0): keep-alives, clean sessions, wildcard topic
-      matching, QoS 1/2 via the Log primitive
-- [ ] RESP (Redis) adapter: GET/SET/PUBLISH/XADD mapped to Map/Log operations
-- [ ] Populate the Phase 0 conformance harness with `paho-mqtt` and `redis-rs`
-      client test suites; publish a compatibility matrix + migration-checker doc/
-      tool for each adapter, flagging unsupported features before users migrate
-- [ ] **Milestone:** tpt-synapse can replace Mosquitto and Redis in the TPT ecosystem
+- [x] MQTT adapter (v3.1.1: keep-alives, clean sessions, wildcard topic
+      matching, QoS 1/2 via the Log primitive) — `adapters/mqtt/src/broker.rs`,
+      `adapters/mqtt/src/codec.rs`, `adapters/mqtt/src/server.rs` + TCP
+      integration tests in `adapters/mqtt/tests/integration.rs`. MQTT v5.0
+      (reason codes, user properties, shared subscriptions, enhanced
+      auth) is a tracked follow-up, not yet implemented.
+- [x] RESP (Redis) adapter: GET/SET/DEL/EXISTS/PUBLISH (pub/sub)/XADD/XRANGE
+      mapped to Map/Log operations — `adapters/resp/src/broker.rs`,
+      `adapters/resp/src/codec.rs`, `adapters/resp/src/server.rs` + TCP
+      integration tests in `adapters/resp/tests/integration.rs`.
+- [x] Populate the Phase 0 conformance harness with in-repo TCP conformance
+      tests for the MQTT and RESP adapters (`adapters/mqtt/tests/integration.rs`,
+      `adapters/resp/tests/integration.rs`); the canonical out-of-process
+      `paho-mqtt` / `redis-rs` client suites remain tracked follow-ups in
+      `conformance/harness/src/lib.rs`. A compatibility-matrix / migration-checker
+      doc is still pending.
+- [ ] **Milestone:** tpt-synapse can replace Mosquitto and Redis in the TPT
+      ecosystem — MQTT 3.1.1 + RESP are wire-compatible and tested end-to-end;
+      MQTT v5.0 parity and a published compatibility matrix are the remaining
+      gaps before this milestone is declared.
 
 ## Phase 3 — Kafka & AMQP Adapters (spec.txt §6 Phase 3)
 

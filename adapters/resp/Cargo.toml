@@ -7,4 +7,9 @@ publish.workspace = true
 
 [dependencies]
 synapse-routing = { path = "../../routing" }
+synapse-core = { path = "../../core" }
 bytes = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+synapse-core = { path = "../../core" }
