@@ -3,19 +3,25 @@
 //! (spec.txt §3.3, §6 Phase 2). Outbound packets are pumped through the same
 //! `mpsc` channel the broker uses for delivery, so the I/O loop and the broker
 //! never share a lock.
+//!
+//! The connection handler is generic over the stream type so the same code
+//! serves both plain TCP and TLS-terminated (mTLS) connections — see
+//! [`serve_tls`], which uses the shared [`synapse_core::tls`] acceptor.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
+
+use synapse_core::tls::TlsAcceptor;
 
 use crate::broker::Broker;
 use crate::codec::{decode_packet, encode_packet, Packet, QoS};
 
-/// Bind `addr` and serve forever.
+/// Bind `addr` and serve forever (plain TCP).
 pub async fn serve(broker: Arc<Broker>, addr: impl ToSocketAddrs) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     serve_with_listener(broker, listener).await
@@ -33,7 +39,42 @@ pub async fn serve_with_listener(broker: Arc<Broker>, listener: TcpListener) -> 
     }
 }
 
-async fn handle_connection(broker: Arc<Broker>, mut sock: TcpStream) -> std::io::Result<()> {
+/// Bind `addr` and serve over mutual TLS (TODO.md `tpt-identity`): every client
+/// must present a certificate trusted by the acceptor's client CA.
+pub async fn serve_tls(
+    broker: Arc<Broker>,
+    addr: impl ToSocketAddrs,
+    acceptor: TlsAcceptor,
+) -> std::io::Result<()> {
+    let listener = TcpListener::bind(addr).await?;
+    serve_tls_with_listener(broker, listener, acceptor).await
+}
+
+/// TLS variant of [`serve_with_listener`].
+pub async fn serve_tls_with_listener(
+    broker: Arc<Broker>,
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+) -> std::io::Result<()> {
+    loop {
+        let (sock, _peer) = listener.accept().await?;
+        let broker = broker.clone();
+        let acceptor = acceptor.clone();
+        tokio::spawn(async move {
+            match acceptor.accept(sock).await {
+                Ok(tls) => {
+                    let _ = handle_connection(broker, tls).await;
+                }
+                Err(_) => {}
+            }
+        });
+    }
+}
+
+async fn handle_connection<S>(broker: Arc<Broker>, mut sock: S) -> std::io::Result<()>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static,
+{
     let (tx, mut rx) = mpsc::unbounded_channel::<Packet>();
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut read_tmp = [0u8; 8192];
@@ -169,7 +210,10 @@ fn handle_packet(
     false
 }
 
-async fn write_packet(sock: &mut TcpStream, pkt: &Packet) -> std::io::Result<()> {
+async fn write_packet<S>(sock: &mut S, pkt: &Packet) -> std::io::Result<()>
+where
+    S: AsyncWriteExt + Unpin,
+{
     let mut frame = Vec::new();
     encode_packet(pkt, &mut frame);
     sock.write_all(&frame).await?;
@@ -177,10 +221,10 @@ async fn write_packet(sock: &mut TcpStream, pkt: &Packet) -> std::io::Result<()>
 }
 
 /// Flush any pending outbound packets before closing.
-async fn drain_outbound(
-    sock: &mut TcpStream,
-    rx: &mut mpsc::UnboundedReceiver<Packet>,
-) -> std::io::Result<()> {
+async fn drain_outbound<S>(sock: &mut S, rx: &mut mpsc::UnboundedReceiver<Packet>) -> std::io::Result<()>
+where
+    S: AsyncWriteExt + Unpin,
+{
     while let Ok(p) = rx.try_recv() {
         write_packet(sock, &p).await?;
     }

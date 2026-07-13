@@ -99,6 +99,20 @@ impl Map {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Snapshot of all live (non-expired) entries, used by the admin API for
+    /// key browsing (TODO.md "Adoption & Tooling").
+    pub fn snapshot(&self) -> Vec<(String, Vec<u8>)> {
+        let mut data = self.data.lock().unwrap();
+        let now = now_millis();
+        let mut out = Vec::new();
+        // Evict expired entries while iterating so the browse view is accurate.
+        data.retain(|_, e| e.expires_at.map_or(true, |exp| exp > now));
+        for (k, e) in data.iter() {
+            out.push((k.clone(), e.value.clone()));
+        }
+        out
+    }
 }
 
 impl Drop for Map {

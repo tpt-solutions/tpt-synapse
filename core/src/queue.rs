@@ -103,6 +103,19 @@ impl Queue {
     pub fn inflight_count(&self) -> usize {
         self.inflight.lock().unwrap().len()
     }
+
+    /// Snapshot of all outstanding messages (ready + in-flight), used by the
+    /// admin API for queue browsing (TODO.md "Adoption & Tooling").
+    pub fn snapshot(&self) -> Vec<(u64, Vec<u8>)> {
+        let mut out = Vec::new();
+        for e in self.ready.lock().unwrap().iter() {
+            out.push((e.seq, e.payload.clone()));
+        }
+        for (seq, e) in self.inflight.lock().unwrap().iter() {
+            out.push((*seq, e.payload.clone()));
+        }
+        out
+    }
 }
 
 impl Drop for Queue {

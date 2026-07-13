@@ -52,6 +52,16 @@ pub mod tenant;
 #[cfg(feature = "consensus")]
 pub mod consensus;
 
+#[cfg(feature = "consensus")]
+pub mod cluster;
+
+/// Broker admin HTTP API (snapshot + SSE live tail) for Synapse Studio.
+pub mod admin;
+
+/// TLS / mTLS termination shared by the protocol adapters and the admin API.
+pub mod tls;
+
+pub use admin::{spawn_admin_server, CoreSnapshot};
 pub use engine::SynapseCore;
 pub use error::{EngineError, EngineResult, ErrorKind};
 pub use http::spawn_metrics_server;

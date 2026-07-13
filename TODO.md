@@ -248,7 +248,13 @@ evaluate or adopt tpt-synapse.
 
 - [ ] Minimal web UI ("Synapse Studio") for topic/queue/key browsing and live
       message tail — `synapsectl` alone won't serve evaluation-stage users, and
-      every competing broker (Kafdrop/AKHQ, RabbitMQ's management UI) leans on this
+      every competing broker (Kafdrop/AKHQ, RabbitMQ's management UI) leans on this.
+      A first cut exists in the `synapse-studio` crate (workspace member): an
+      `axum`-based dashboard that proxies the broker's Prometheus `/metrics`
+      endpoint into a browsable table (`synapse-studio/src/main.rs`, unit-tested
+      metrics parsing + status endpoint). It only surfaces metrics today — actual
+      topic/queue/key browsing and live message tail against the running broker
+      is the remaining gap before this item is checked off.
 - [ ] Kubernetes operator (or at minimum a Helm chart), tracked as a Phase 4+
       follow-on once clustering lands — the target audience (ops teams replacing
       Kafka/RabbitMQ) will expect a Strimzi-style deployment story

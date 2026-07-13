@@ -122,8 +122,22 @@ impl RaftNode {
     pub fn commit_index(&self) -> u64 {
         self.commit_index
     }
+
+    /// Advance the commit index up to `idx` (clamped to the log length). A real
+    /// leader does this once a majority has acknowledged; the in-memory
+    /// [`crate::cluster::Cluster`] test drives it directly after replication.
+    pub fn commit_up_to(&mut self, idx: u64) {
+        let max = self.log_len();
+        self.commit_index = idx.min(max);
+    }
     pub fn log_len(&self) -> u64 {
         self.log.len() as u64
+    }
+
+    /// Clone of the replicated log, used by the apply-loop / transport
+    /// (TODO.md Phase 4 `cluster.rs`) to push entries to followers.
+    pub fn log_entries(&self) -> Vec<Entry> {
+        self.log.clone()
     }
 
     fn last_log(&self) -> (u64, u64) {
@@ -266,6 +280,26 @@ impl RaftNode {
         let index = self.log_len() + 1;
         self.log.push(Entry { term, index, data });
         index
+    }
+
+    /// Apply every committed-but-not-yet-applied entry to the state machine via
+    /// `apply`. Advances `last_applied` as entries are applied. This is the
+    /// missing wiring called out in TODO.md Phase 4: the caller drives the real
+    /// `Log`/`Queue`/`Map` primitives from here (see `cluster.rs`).
+    pub fn apply_committed<F>(&mut self, mut apply: F)
+    where
+        F: FnMut(&Entry),
+    {
+        while self.last_applied < self.commit_index {
+            let next = self.last_applied + 1;
+            match self.log.get((next - 1) as usize) {
+                Some(e) => {
+                    apply(e);
+                    self.last_applied = next;
+                }
+                None => break,
+            }
+        }
     }
 }
 

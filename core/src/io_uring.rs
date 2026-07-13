@@ -52,6 +52,9 @@ pub async fn accept_loop_tokio<F, Fut>(
 /// tokio-uring-backed accept loop (Linux + `io-uring` feature only). Same
 /// connection-handler shape as [`accept_loop_tokio`], backed by an io_uring
 /// runtime for lower per-connection syscall overhead.
+/// tokio-uring-backed accept loop (Linux + `io-uring` feature only). Same
+/// connection-handler shape as [`accept_loop_tokio`], backed by an io_uring
+/// runtime for lower per-connection syscall overhead.
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub async fn accept_loop_uring<F, Fut>(
     listener: tokio_uring::net::TcpListener,
@@ -65,6 +68,40 @@ pub async fn accept_loop_uring<F, Fut>(
             Ok((sock, _)) => {
                 let fut = make_conn(sock);
                 tokio_uring::spawn(fut);
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// TLS-terminating accept loop: performs the handshake with `acceptor` on each
+/// accepted connection, then hands the [`tokio_rustls::server::TlsStream`] to
+/// `make_conn`. This is the shared entry point that lets every protocol adapter
+/// opt into mTLS (TODO.md `tpt-identity`) by swapping its accept loop for this
+/// one and supplying a [`crate::tls::TlsAcceptor`].
+pub async fn accept_loop_tls<F, Fut>(
+    listener: tokio::net::TcpListener,
+    acceptor: crate::tls::TlsAcceptor,
+    make_conn: F,
+) where
+    F: FnMut(tokio_rustls::server::TlsStream<tokio::net::TcpStream>) -> Fut + Send + Clone + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let make_conn = make_conn;
+    loop {
+        match listener.accept().await {
+            Ok((sock, _)) => {
+                let acceptor = acceptor.clone();
+                let mut conn = make_conn.clone();
+                tokio::spawn(async move {
+                    match acceptor.accept(sock).await {
+                        Ok(tls) => {
+                            let fut = conn(tls);
+                            fut.await;
+                        }
+                        Err(_) => {}
+                    }
+                });
             }
             Err(_) => break,
         }
