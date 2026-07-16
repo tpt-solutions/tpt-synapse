@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-synapse-adapter-amqp = { path = ".." }
+synapse-adapter-amqp = { path = "..", package = "tpt-synapse-adapter-amqp" }
 
 [[bin]]
 name = "parse"

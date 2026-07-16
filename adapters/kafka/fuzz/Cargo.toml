@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-synapse-adapter-kafka = { path = ".." }
+synapse-adapter-kafka = { path = "..", package = "tpt-synapse-adapter-kafka" }
 
 [[bin]]
 name = "parse"

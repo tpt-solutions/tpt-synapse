@@ -1,5 +1,5 @@
 [package]
-name = "synapse-adapter-amqp"
+name = "tpt-synapse-adapter-amqp"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -12,11 +12,14 @@ keywords = ["amqp", "broker", "rabbitmq", "protocol", "adapter"]
 categories = ["network-programming", "asynchronous"]
 readme = "README.md"
 
+[lib]
+name = "synapse_adapter_amqp"
+
 [dependencies]
-synapse-routing = { path = "../../routing", version = "0.1.0" }
-synapse-core = { path = "../../core", version = "0.1.0" }
+synapse-routing = { path = "../../routing", version = "0.1.0", package = "tpt-synapse-routing" }
+synapse-core = { path = "../../core", version = "0.1.0", package = "tpt-synapse-core" }
 bytes = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-synapse-core = { path = "../../core", version = "0.1.0" }
+synapse-core = { path = "../../core", version = "0.1.0", package = "tpt-synapse-core" }

@@ -1,5 +1,5 @@
 [package]
-name = "synapse-core"
+name = "tpt-synapse-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,9 @@ authors.workspace = true
 keywords = ["broker", "storage", "message-queue", "mqtt", "kafka"]
 categories = ["database", "network-programming", "asynchronous"]
 readme = "README.md"
+
+[lib]
+name = "synapse_core"
 
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }

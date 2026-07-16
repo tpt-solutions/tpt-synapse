@@ -17,7 +17,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 publish = false
 repository = "https://github.com/tpt-solutions/tpt-synapse"
 homepage = "https://github.com/tpt-solutions/tpt-synapse"
@@ -32,3 +32,11 @@ bytes = "1"
 # engine's write path is designed against it from Phase 1 rather than retrofitted.
 [workspace.dependencies.tokio-uring]
 version = "0.5"
+
+# cargo-release (https://github.com/crate-ci/cargo-release): all publishable
+# crates share one version number per release, bumped and published together
+# in the order cargo-release derives from the workspace dependency graph.
+[workspace.metadata.release]
+shared-version = true
+consolidate-commits = true
+tag-name = "v{{version}}"

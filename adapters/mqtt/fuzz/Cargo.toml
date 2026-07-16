@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-synapse-adapter-mqtt = { path = ".." }
+synapse-adapter-mqtt = { path = "..", package = "tpt-synapse-adapter-mqtt" }
 
 [[bin]]
 name = "parse"

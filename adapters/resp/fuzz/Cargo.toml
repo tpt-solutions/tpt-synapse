@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-synapse-adapter-resp = { path = ".." }
+synapse-adapter-resp = { path = "..", package = "tpt-synapse-adapter-resp" }
 
 [[bin]]
 name = "parse"

@@ -3647,138 +3647,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "synapse-adapter-amqp"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "synapse-core",
- "synapse-routing",
- "tokio",
-]
-
-[[package]]
-name = "synapse-adapter-kafka"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "synapse-core",
- "synapse-routing",
- "tokio",
-]
-
-[[package]]
-name = "synapse-adapter-mqtt"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "synapse-core",
- "synapse-routing",
- "tokio",
-]
-
-[[package]]
-name = "synapse-adapter-native"
-version = "0.1.0"
-dependencies = [
- "aead",
- "bytes",
- "chacha20poly1305",
- "crc32fast",
- "hkdf",
- "rand 0.8.6",
- "sha2",
- "synapse-core",
- "synapse-routing",
- "thiserror 1.0.69",
- "tokio",
- "x25519-dalek",
-]
-
-[[package]]
-name = "synapse-adapter-resp"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "synapse-core",
- "synapse-routing",
- "tokio",
-]
-
-[[package]]
-name = "synapse-broker"
-version = "0.1.0"
-dependencies = [
- "base64",
- "rand 0.8.6",
- "synapse-adapter-amqp",
- "synapse-adapter-kafka",
- "synapse-adapter-mqtt",
- "synapse-adapter-native",
- "synapse-adapter-resp",
- "synapse-core",
- "tokio",
-]
-
-[[package]]
 name = "synapse-conformance-harness"
 version = "0.1.0"
 dependencies = [
  "lapin",
  "rdkafka",
- "synapse-adapter-amqp",
- "synapse-adapter-kafka",
- "synapse-core",
  "tokio",
-]
-
-[[package]]
-name = "synapse-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "criterion",
- "openraft",
- "prometheus",
- "rustls 0.22.4",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "tokio",
- "tokio-rustls 0.25.0",
- "tokio-uring",
-]
-
-[[package]]
-name = "synapse-native-client"
-version = "0.1.0"
-dependencies = [
- "synapse-adapter-native",
- "synapse-core",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "synapse-routing"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "criterion",
- "synapse-core",
- "wasmtime",
-]
-
-[[package]]
-name = "synapse-studio"
-version = "0.1.0"
-dependencies = [
- "axum",
- "reqwest",
- "serde",
- "serde_json",
- "synapse-core",
- "tokio",
+ "tpt-synapse-adapter-amqp",
+ "tpt-synapse-adapter-kafka",
+ "tpt-synapse-core",
 ]
 
 [[package]]
@@ -4178,17 +4055,140 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
+name = "tpt-synapse-adapter-amqp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "tokio",
+ "tpt-synapse-core",
+ "tpt-synapse-routing",
+]
+
+[[package]]
+name = "tpt-synapse-adapter-kafka"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "tokio",
+ "tpt-synapse-core",
+ "tpt-synapse-routing",
+]
+
+[[package]]
+name = "tpt-synapse-adapter-mqtt"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "tokio",
+ "tpt-synapse-core",
+ "tpt-synapse-routing",
+]
+
+[[package]]
+name = "tpt-synapse-adapter-native"
+version = "0.1.0"
+dependencies = [
+ "aead",
+ "bytes",
+ "chacha20poly1305",
+ "crc32fast",
+ "hkdf",
+ "rand 0.8.6",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tpt-synapse-core",
+ "tpt-synapse-routing",
+ "x25519-dalek",
+]
+
+[[package]]
+name = "tpt-synapse-adapter-resp"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "tokio",
+ "tpt-synapse-core",
+ "tpt-synapse-routing",
+]
+
+[[package]]
+name = "tpt-synapse-broker"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "rand 0.8.6",
+ "tokio",
+ "tpt-synapse-adapter-amqp",
+ "tpt-synapse-adapter-kafka",
+ "tpt-synapse-adapter-mqtt",
+ "tpt-synapse-adapter-native",
+ "tpt-synapse-adapter-resp",
+ "tpt-synapse-core",
+]
+
+[[package]]
+name = "tpt-synapse-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "criterion",
+ "openraft",
+ "prometheus",
+ "rustls 0.22.4",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls 0.25.0",
+ "tokio-uring",
+]
+
+[[package]]
+name = "tpt-synapse-native-client"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
+ "tokio",
+ "tpt-synapse-adapter-native",
+ "tpt-synapse-core",
+]
+
+[[package]]
+name = "tpt-synapse-routing"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "criterion",
+ "tpt-synapse-core",
+ "wasmtime",
+]
+
+[[package]]
+name = "tpt-synapse-studio"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tpt-synapse-core",
+]
+
+[[package]]
 name = "tpt-workflow"
 version = "0.1.0"
 dependencies = [
  "prometheus",
  "prost",
- "synapse-core",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "tpt-synapse-core",
  "uuid",
 ]
 
