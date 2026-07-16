@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-broker
+spec:
+  replicas: {{ .Values.broker.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}-broker
+    spec:
+      containers:
+        - name: broker
+          image: "{{ .Values.broker.image.repository }}:{{ .Values.broker.image.tag }}"
+          imagePullPolicy: {{ .Values.broker.image.pullPolicy }}
+          env:
+            - name: SYNAPSE_MQTT_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.mqtt }}"
+            - name: SYNAPSE_KAFKA_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.kafka }}"
+            - name: SYNAPSE_AMQP_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.amqp }}"
+            - name: SYNAPSE_RESP_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.resp }}"
+            - name: SYNAPSE_NATIVE_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.native }}"
+            - name: SYNAPSE_ADMIN_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.admin }}"
+            - name: SYNAPSE_METRICS_ADDR
+              value: "0.0.0.0:{{ .Values.broker.ports.metrics }}"
+            {{- if .Values.broker.nativeKey }}
+            - name: SYNAPSE_NATIVE_KEY
+              value: {{ .Values.broker.nativeKey | quote }}
+            {{- end }}
+          ports:
+            - name: mqtt
+              containerPort: {{ .Values.broker.ports.mqtt }}
+            - name: kafka
+              containerPort: {{ .Values.broker.ports.kafka }}
+            - name: amqp
+              containerPort: {{ .Values.broker.ports.amqp }}
+            - name: resp
+              containerPort: {{ .Values.broker.ports.resp }}
+            - name: native
+              containerPort: {{ .Values.broker.ports.native }}
+            - name: admin
+              containerPort: {{ .Values.broker.ports.admin }}
+            - name: metrics
+              containerPort: {{ .Values.broker.ports.metrics }}
+          resources:
+            {{- toYaml .Values.broker.resources | nindent 12 }}

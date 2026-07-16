@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-broker
+spec:
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}-broker
+  ports:
+    - name: mqtt
+      port: {{ .Values.broker.ports.mqtt }}
+      targetPort: mqtt
+    - name: kafka
+      port: {{ .Values.broker.ports.kafka }}
+      targetPort: kafka
+    - name: amqp
+      port: {{ .Values.broker.ports.amqp }}
+      targetPort: amqp
+    - name: resp
+      port: {{ .Values.broker.ports.resp }}
+      targetPort: resp
+    - name: native
+      port: {{ .Values.broker.ports.native }}
+      targetPort: native
+    - name: admin
+      port: {{ .Values.broker.ports.admin }}
+      targetPort: admin
+    - name: metrics
+      port: {{ .Values.broker.ports.metrics }}
+      targetPort: metrics

@@ -1,0 +1,34 @@
+{{- if .Values.studio.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-studio
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-studio
+spec:
+  replicas: {{ .Values.studio.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-studio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}-studio
+    spec:
+      containers:
+        - name: studio
+          image: "{{ .Values.studio.image.repository }}:{{ .Values.studio.image.tag }}"
+          imagePullPolicy: {{ .Values.studio.image.pullPolicy }}
+          env:
+            - name: SYNAPSE_STUDIO_ADDR
+              value: "0.0.0.0:{{ .Values.studio.service.port }}"
+            - name: SYNAPSE_BROKER_ADMIN
+              value: "http://{{ .Release.Name }}-broker:{{ .Values.broker.ports.admin }}"
+            - name: SYNAPSE_BROKER_METRICS
+              value: "http://{{ .Release.Name }}-broker:{{ .Values.broker.ports.metrics }}/metrics"
+          ports:
+            - name: http
+              containerPort: {{ .Values.studio.service.port }}
+          resources:
+            {{- toYaml .Values.studio.resources | nindent 12 }}
+{{- end }}

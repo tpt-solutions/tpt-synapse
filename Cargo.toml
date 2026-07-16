@@ -10,13 +10,18 @@ members = [
     "adapters/native",
     "synapse-native-client",
     "synapse-studio",
+    "broker",
     "conformance/harness",
+    "tpt-workflow",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
 publish = false
+repository = "https://github.com/tpt-solutions/tpt-synapse"
+homepage = "https://github.com/tpt-solutions/tpt-synapse"
+authors = ["tpt-solutions"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }

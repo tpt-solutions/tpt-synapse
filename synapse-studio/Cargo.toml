@@ -3,14 +3,24 @@ name = "synapse-studio"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
+description = "Web dashboard for the tpt-synapse unified broker — topic/queue/key browsing and metrics"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["broker", "dashboard", "mqtt", "kafka", "monitoring"]
+categories = ["web-programming", "network-programming", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 axum = { version = "0.7", features = ["macros"] }
 tokio = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# Used only for the optional embedded demo broker (SYNAPSE_STUDIO_DEMO=1), so an
+# evaluator can run Studio standalone and immediately browse a live broker.
+synapse-core = { path = "../core", version = "0.1.0" }
 
 [dev-dependencies]
 tokio = { workspace = true }

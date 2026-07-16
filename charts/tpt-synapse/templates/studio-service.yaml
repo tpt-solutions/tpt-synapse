@@ -1,0 +1,16 @@
+{{- if .Values.studio.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-studio
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-studio
+spec:
+  type: {{ .Values.studio.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ .Release.Name }}-studio
+  ports:
+    - name: http
+      port: {{ .Values.studio.service.port }}
+      targetPort: http
+{{- end }}

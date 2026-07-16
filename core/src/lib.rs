@@ -55,6 +55,9 @@ pub mod consensus;
 #[cfg(feature = "consensus")]
 pub mod cluster;
 
+#[cfg(feature = "consensus")]
+pub mod transport;
+
 /// Broker admin HTTP API (snapshot + SSE live tail) for Synapse Studio.
 pub mod admin;
 

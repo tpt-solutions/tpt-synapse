@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+# Synapse Studio (TODO.md "Adoption & Tooling"): the web UI that talks to a
+# running synapse-broker's admin API (SYNAPSE_BROKER_ADMIN) and metrics
+# endpoint (SYNAPSE_BROKER_METRICS).
+
+FROM rust:1-bookworm AS builder
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p synapse-studio
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /src/target/release/synapse-studio /usr/local/bin/synapse-studio
+
+EXPOSE 8081
+ENV SYNAPSE_STUDIO_ADDR=0.0.0.0:8081
+
+ENTRYPOINT ["/usr/local/bin/synapse-studio"]

@@ -1,0 +1,21 @@
+tpt-synapse is deployed as:
+  - {{ .Release.Name }}-broker: MQTT ({{ .Values.broker.ports.mqtt }}), Kafka
+    ({{ .Values.broker.ports.kafka }}), AMQP ({{ .Values.broker.ports.amqp }}),
+    RESP ({{ .Values.broker.ports.resp }}), native
+    ({{ .Values.broker.ports.native }}), admin API
+    ({{ .Values.broker.ports.admin }}), metrics
+    ({{ .Values.broker.ports.metrics }})
+{{- if .Values.studio.enabled }}
+  - {{ .Release.Name }}-studio: web UI on port {{ .Values.studio.service.port }}
+{{- end }}
+
+Studio proxies the broker's admin API server-side (same-origin; no CORS, and
+the broker admin port never needs to be reachable from the browser) — only
+the Studio Service needs to be exposed to reach the UI from outside the
+cluster:
+
+  kubectl port-forward svc/{{ .Release.Name }}-studio {{ .Values.studio.service.port }}:{{ .Values.studio.service.port }}
+
+Clustering is not wired into synapse-broker yet — keep broker.replicaCount at
+1 until the Raft transport (core/src/transport.rs) is driven by this binary;
+see TODO.md Phase 4.

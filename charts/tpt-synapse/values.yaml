@@ -1,0 +1,41 @@
+# Default values for the tpt-synapse chart.
+#
+# Clustering is not wired into synapse-broker yet (TODO.md Phase 4's embedded
+# Raft transport exists in core/src/transport.rs but no binary drives it as a
+# multi-node deployment), so broker.replicaCount is expected to stay at 1
+# until that follow-up lands — running >1 replicas today gives you N
+# independent, non-replicated brokers, not a cluster.
+
+broker:
+  replicaCount: 1
+  image:
+    repository: tpt-synapse/broker
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources: {}
+  # Set any of these to "off" to disable that listener.
+  ports:
+    mqtt: 1883
+    kafka: 9092
+    amqp: 5672
+    resp: 6379
+    native: 7900
+    admin: 9091
+    metrics: 9090
+  # Base64-encoded 32-byte key for the native adapter's mandatory AEAD
+  # encryption. Leave empty to let synapse-broker generate an ephemeral key at
+  # boot (fine for evaluation, not for a real deployment — clients need this
+  # key out of band and it changes every pod restart if left unset).
+  nativeKey: ""
+
+studio:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: tpt-synapse/studio
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+  resources: {}

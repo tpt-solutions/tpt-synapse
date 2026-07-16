@@ -6,9 +6,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-synapse-core = { path = "../../core" }
-synapse-adapter-kafka = { path = "../../adapters/kafka" }
-synapse-adapter-amqp = { path = "../../adapters/amqp" }
+synapse-core = { path = "../../core", version = "0.1.0" }
+synapse-adapter-kafka = { path = "../../adapters/kafka", version = "0.1.0" }
+synapse-adapter-amqp = { path = "../../adapters/amqp", version = "0.1.0" }
 
 [dev-dependencies]
 tokio = { workspace = true }

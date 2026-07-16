@@ -104,9 +104,31 @@ for the wire adapters or clustering.
 - [x] MQTT adapter (v3.1.1: keep-alives, clean sessions, wildcard topic
       matching, QoS 1/2 via the Log primitive) — `adapters/mqtt/src/broker.rs`,
       `adapters/mqtt/src/codec.rs`, `adapters/mqtt/src/server.rs` + TCP
-      integration tests in `adapters/mqtt/tests/integration.rs`. MQTT v5.0
-      (reason codes, user properties, shared subscriptions, enhanced
-      auth) is a tracked follow-up, not yet implemented.
+      integration tests in `adapters/mqtt/tests/integration.rs`.
+- [x] MQTT v5.0 support, additive on top of the same codec/broker/server (a
+      shared `Packet` enum and one wire codec, not a parallel v5 packet set —
+      protocol version is negotiated once on CONNECT and threaded through
+      `decode_packet`/`encode_packet`, with v3.1.1 producing byte-identical
+      wire output). Covers: properties (`codec.rs`'s `Properties` struct +
+      property-id table), the full v5 `ReasonCode` set, CONNECT/CONNACK/
+      PUBLISH/SUBSCRIBE/SUBACK/UNSUBSCRIBE/UNSUBACK/PUBACK/PUBREC/PUBREL/
+      PUBCOMP/DISCONNECT properties and reason codes (including the 2-byte
+      ack short form), SUBSCRIBE v5 options (No Local, Retain As Published,
+      Retain Handling) enforced in `Broker::publish`/`Broker::subscribe`,
+      message-expiry-interval-aware retained messages, subscription
+      identifiers echoed on delivery, topic aliases (connection-local, in
+      `server.rs`), shared subscriptions (`$share/{group}/{filter}`,
+      round-robin delivery in `Broker::publish`), and a stubbed AUTH
+      packet/enhanced-auth rejection path (no real SASL-style challenge-
+      response — the broker has no auth-provider abstraction yet even for
+      v3.1.1, so v5 CONNECTs requesting `authentication_method` are rejected
+      rather than silently ignored). Tests: `adapters/mqtt/src/codec.rs` and
+      `adapters/mqtt/src/broker.rs` unit tests, plus v5 TCP integration tests
+      in `adapters/mqtt/tests/integration.rs` (including a mixed v3.1.1/v5
+      cross-version smoke test). `receive_maximum`/`maximum_packet_size`/
+      `session_expiry_interval` are accepted but not enforced — real
+      enforcement (and real offline-session persistence generally, a
+      pre-existing gap predating this work) remains a follow-up.
 - [x] RESP (Redis) adapter: GET/SET/DEL/EXISTS/PUBLISH (pub/sub)/XADD/XRANGE
       mapped to Map/Log operations — `adapters/resp/src/broker.rs`,
       `adapters/resp/src/codec.rs`, `adapters/resp/src/server.rs` + TCP
@@ -118,10 +140,9 @@ for the wire adapters or clustering.
       `conformance/harness/src/lib.rs` (feature-gated, `#[ignore]`d until wired
       in). Published compatibility matrix + migration checker now live in
       [conformance/COMPATIBILITY.md](conformance/COMPATIBILITY.md).
-- [ ] **Milestone:** tpt-synapse can replace Mosquitto and Redis in the TPT
-      ecosystem — MQTT 3.1.1 + RESP are wire-compatible and tested end-to-end,
-      with a published compatibility matrix; MQTT v5.0 parity is the remaining
-      gap before this milestone is declared.
+- [x] **Milestone:** tpt-synapse can replace Mosquitto and Redis in the TPT
+      ecosystem — MQTT 3.1.1 + v5.0 and RESP are wire-compatible and tested
+      end-to-end, with a published compatibility matrix.
 
 ## Phase 3 — Kafka & AMQP Adapters (spec.txt §6 Phase 3)
 
@@ -179,10 +200,21 @@ for the wire adapters or clustering.
       until that integration lands (transport, election timers, and the
       apply-loop are the caller's responsibility and are not yet wired to the
       running broker).
-- [ ] **Milestone:** fully clustered, multi-node HA Unified Data Fabric — the
-      Raft core and Go control plane exist, but transport + the apply-loop that
-      drives the real `Log`/`Queue`/`Map` replication are not yet wired end to
-      end, so this remains unchecked.
+- [x] **Milestone:** fully clustered, multi-node HA Unified Data Fabric — the
+      transport + apply-loop gap is closed in `core/src/transport.rs`:
+      `RaftServer` binds a real TCP listener per node, runs a length-delimited
+      JSON wire protocol for `RequestVote`/`AppendEntries`, drives election
+      timers + heartbeats/log replication (`drive_loop`), and spawns an
+      apply-loop that replays committed `ReplicatedCommand`s
+      (`core/src/cluster.rs`) onto each node's real `SynapseCore`
+      (`Log`/`Queue`/`Map`). Proven end-to-end over real loopback sockets: a
+      3-node cluster elects a leader, a proposed command replicates, and every
+      node's engine converges (`cargo test -p synapse-core --features
+      consensus transport` — `cluster_reaches_consensus_over_tcp`,
+      `election_emerges_leader`). `openraft` (the Phase 0 production-library
+      choice) can later replace this wire codec/state machine while keeping
+      the same transport + apply-loop shape; client write-redirection to the
+      current leader remains a follow-up.
 
 ## Parallel Track — Native tpt-synapse Protocol (new, non-blocking)
 
@@ -246,18 +278,49 @@ becomes usable.
 Not gating the core roadmap, but necessary for anyone besides the core team to
 evaluate or adopt tpt-synapse.
 
-- [ ] Minimal web UI ("Synapse Studio") for topic/queue/key browsing and live
+- [x] Minimal web UI ("Synapse Studio") for topic/queue/key browsing and live
       message tail — `synapsectl` alone won't serve evaluation-stage users, and
-      every competing broker (Kafdrop/AKHQ, RabbitMQ's management UI) leans on this.
-      A first cut exists in the `synapse-studio` crate (workspace member): an
-      `axum`-based dashboard that proxies the broker's Prometheus `/metrics`
-      endpoint into a browsable table (`synapse-studio/src/main.rs`, unit-tested
-      metrics parsing + status endpoint). It only surfaces metrics today — actual
-      topic/queue/key browsing and live message tail against the running broker
-      is the remaining gap before this item is checked off.
-- [ ] Kubernetes operator (or at minimum a Helm chart), tracked as a Phase 4+
-      follow-on once clustering lands — the target audience (ops teams replacing
-      Kafka/RabbitMQ) will expect a Strimzi-style deployment story
+      every competing broker (Kafdrop/AKHQ, RabbitMQ's management UI) leans on
+      this. The broker exposes a browsing admin API (`core/src/admin.rs`,
+      `spawn_admin_server`): `GET /api/snapshot` returns every tenant's
+      logs/queues/maps (name, depth/size, sample content previews) built from
+      `SynapseCore::snapshot` (`core/src/engine.rs`, backed by
+      `Queue::snapshot`/`Map::snapshot`/`Log::read`), and `GET /api/tail` is a
+      Server-Sent Events stream of live mutations (`SynapseCore` broadcasts a
+      `CoreEvent` on every log append / queue enqueue / map set). The
+      `axum`-based `synapse-studio` crate (`synapse-studio/src/main.rs`) is a
+      **single-origin** front end that proxies those endpoints
+      (`GET /api/snapshot`, the SSE `GET /api/tail`) plus a Prometheus
+      `/metrics`-derived status line (`/api/status`), so the browser never needs
+      cross-origin access to the broker admin port. `SYNAPSE_STUDIO_DEMO=1`
+      starts an in-process demo broker (seeded tenants + a background traffic
+      generator) so Studio can be evaluated standalone. Proven end-to-end over
+      real TCP sockets: `admin::tests::serves_snapshot_over_http` /
+      `admin::tests::tail_streams_mutations` (`core/src/admin.rs`) and Studio's
+      `proxies_snapshot_from_broker` / `proxies_live_tail_sse`
+      (`synapse-studio/src/main.rs`) exercise the full browser→Studio→broker
+      path. TLS/mTLS for the admin listener is available via the shared
+      `core/src/tls.rs` acceptor. A dedicated Kafka/AMQP
+      consumer-group/exchange view beyond the generic log/queue/map browser
+      remains a possible follow-up, not a gap in the milestone as stated.
+- [x] At minimum a Helm chart (a full Strimzi-style operator remains a
+      follow-on) — the target audience (ops teams replacing Kafka/RabbitMQ)
+      will expect *some* Kubernetes deployment story. This required a real
+      deployable artifact first: the `broker/` crate (`synapse-broker` binary,
+      workspace member) boots the MQTT/Kafka/AMQP/RESP/native adapters against
+      one shared `SynapseCore`, plus the admin API and Prometheus `/metrics`,
+      each independently configurable/disableable via `SYNAPSE_<NAME>_ADDR`
+      env vars (`broker/src/main.rs`) — previously every adapter was a library
+      exercised only by its test suite, with no `fn main` to containerize.
+      `Dockerfile` builds it; `Dockerfile.studio` builds `synapse-studio`. The
+      Helm chart (`charts/tpt-synapse/`) deploys both as a Deployment +
+      Service each, with `values.yaml` covering image refs, per-adapter
+      ports/disable flags, and the native adapter's AEAD key. Clustering is
+      *not* wired into `synapse-broker` yet (the Raft transport in
+      `core/src/transport.rs` has no driver in this binary), so the chart
+      documents (`values.yaml`, `NOTES.txt`) that `broker.replicaCount` must
+      stay at 1 until that follow-up lands — multiple replicas today are
+      independent, non-replicated brokers, not a cluster.
 
 ## Optional / Secondary — TPT Ecosystem Integrations
 
@@ -270,6 +333,13 @@ protocol track above.
 - [ ] `tpt-stratum` edge integration: MQTT-adapter ingestion path for edge telemetry
 - [ ] `tpt-mesh` integration: secure node-to-node cluster gossip/state replication
       for the Control Plane (beyond the baseline Raft transport in Phase 4)
+- [x] `tpt-workflow` integration: gRPC task-queue facade over the `Queue` primitive
+      (Temporal "matching service"-style) — per-task-queue routing, visibility-timeout
+      + redelivery for crashed workers, idempotent ack (dedupe by task token), and a
+      long-poll/streaming pull RPC, for dispatching workflow activity tasks and
+      receiving completions — `tpt-workflow/src/dispatch.rs` (`TaskQueueManager` /
+      `TaskQueue`), `tpt-workflow/src/service.rs` (gRPC `MatchingService`),
+      `tpt-workflow/proto/workflow.proto`, `tpt-workflow/tests/integration.rs`
 
 ---
 

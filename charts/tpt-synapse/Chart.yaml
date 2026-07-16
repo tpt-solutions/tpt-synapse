@@ -1,0 +1,8 @@
+apiVersion: v2
+name: tpt-synapse
+description: >-
+  tpt-synapse broker (MQTT/Kafka/AMQP/RESP/native adapters) and Synapse
+  Studio, the evaluation web UI. See TODO.md "Adoption & Tooling".
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

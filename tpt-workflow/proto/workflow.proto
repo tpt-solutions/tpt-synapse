@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package synapse.workflow.v1;
+
+// MatchingService is a Temporal "matching service"-style task-queue facade over
+// the tpt-synapse `Queue` primitive. Schedulers push tasks; workers long-poll or
+// stream them; completions are acknowledged idempotently by task token.
+//
+// Routing is per task queue: a (tenant, task_queue, task_type) tuple maps to one
+// isolated FIFO queue, so activity tasks and workflow tasks stay separated, and
+// two tenants never observe each other's work.
+service MatchingService {
+  // Scheduler side: enqueue a task onto a task queue.
+  rpc AddTask(AddTaskRequest) returns (AddTaskResponse);
+
+  // Worker side: long-poll pull a single task. Blocks until a task is available
+  // or `long_poll_timeout_ms` elapses (whichever comes first).
+  rpc PollTask(PollTaskRequest) returns (PollTaskResponse);
+
+  // Worker side: server-streaming pull. Stays open and delivers tasks as they
+  // arrive, each carrying its own visibility timeout for redelivery accounting.
+  rpc StreamTasks(StreamTasksRequest) returns (stream Task);
+
+  // Worker side: idempotent completion by task token. A duplicate response for
+  // an already-completed token returns `duplicate = true` (success).
+  rpc RespondTaskCompleted(RespondRequest) returns (RespondResponse);
+
+  // Worker side: idempotent failure by task token. Re-enqueues the task for
+  // redelivery and records the token as responded (idempotent like completion).
+  rpc RespondTaskFailed(RespondRequest) returns (RespondResponse);
+}
+
+// A single unit of work delivered to a worker. `task_token` is the opaque
+// handle the worker must return to ack/fail the task.
+message Task {
+  bytes task_token = 1;   // unique per delivery; opaque to the worker
+  string task_queue = 2;  // the task queue this task came from
+  string task_type = 3;   // "activity" | "workflow" | caller-defined
+  bytes payload = 4;      // the activity/workflow input bytes
+  int64 attempt = 5;      // 1-based delivery attempt (increments on redelivery)
+}
+
+message AddTaskRequest {
+  string tenant = 1;
+  string task_queue = 2;
+  string task_type = 3;                 // optional; routes to a per-type sub-queue
+  bytes payload = 4;
+  int64 visibility_timeout_ms = 5;      // optional; updates the queue default
+}
+
+message AddTaskResponse {
+  uint64 seq = 1;   // internal sequence assigned by the Queue primitive
+}
+
+message PollTaskRequest {
+  string tenant = 1;
+  string task_queue = 2;
+  string worker_id = 3;                 // informational; surfaced in metrics
+  string task_type = 4;                 // optional filter; routes to a sub-queue
+  int64 long_poll_timeout_ms = 5;       // 0 / negative => server default
+}
+
+message PollTaskResponse {
+  Task task = 1;   // absent if the long-poll timed out with no task available
+}
+
+message StreamTasksRequest {
+  string tenant = 1;
+  string task_queue = 2;
+  string worker_id = 3;
+  string task_type = 4;
+  int64 visibility_timeout_ms = 5;      // optional override of the queue default
+}
+
+message RespondRequest {
+  bytes task_token = 1;
+  bytes result_payload = 2;   // set on RespondTaskCompleted
+  string failure_message = 3; // set on RespondTaskFailed
+  string failure_stack = 4;
+}
+
+message RespondResponse {
+  bool accepted = 1;   // false if the task token is unknown
+  bool duplicate = 2;  // true if the token was already responded (idempotent)
+}

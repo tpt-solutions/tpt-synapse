@@ -3,9 +3,23 @@ name = "synapse-routing"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = true
+description = "Unified routing engine for tpt-synapse — MQTT topic routing, Kafka stream routing, AMQP graph routing, SQL-like rule engine, and WASM transforms"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["routing", "mqtt", "kafka", "amqp", "broker"]
+categories = ["network-programming", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
-synapse-core = { path = "../core" }
+synapse-core = { path = "../core", version = "0.1.0" }
 bytes = { workspace = true }
 wasmtime = { version = "46", default-features = false, features = ["cranelift", "runtime", "wat"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "topic_bench"
+harness = false

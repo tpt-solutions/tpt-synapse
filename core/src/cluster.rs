@@ -134,15 +134,27 @@ impl Cluster {
         let peers = self.nodes.clone();
         let ids = self.ids.clone();
         let mut leader_node = leader.borrow_mut();
-        leader_node.start_election(|peer, term, last_idx, last_term| {
-            if let Some(pi) = ids.iter().position(|x| x == peer) {
-                if pi == leader_idx {
-                    return Some(true); // self already counted in start_election
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (last_index, last_term) = leader_node.begin_election();
+            let mut votes = 1u64;
+            for peer in &ids {
+                if peer == &self.ids[leader_idx] {
+                    continue;
                 }
-                Some(peers[pi].borrow_mut().handle_request_vote(term, peer, last_idx, last_term).1)
-            } else {
-                None
+                if let Some(pi) = ids.iter().position(|x| x == peer) {
+                    let (_, granted) = peers[pi]
+                        .borrow_mut()
+                        .handle_request_vote(last_term, peer, last_index, last_term);
+                    if granted {
+                        votes += 1;
+                    }
+                }
             }
+            leader_node.finalize_election(votes);
+            votes
         })
     }
 
@@ -214,6 +226,14 @@ impl Cluster {
 mod tests {
     use super::*;
 
+    /// Block on a future inside a synchronous test.
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
     #[test]
     fn election_picks_leader() {
         let c = Cluster::new(&["a", "b", "c"]);
@@ -281,7 +301,8 @@ mod tests {
             vec!["a".into(), "b".into()],
             MemoryStore::new(),
         );
-        node.start_election(|_, _, _, _| Some(true));
+        node.begin_election();
+        node.finalize_election(2);
         assert_eq!(node.role(), crate::consensus::Role::Leader);
         // A higher-term AppendEntries steps us back to follower.
         let (term, ok) = node.handle_append_entries(7, 0, 0, vec![], 0);

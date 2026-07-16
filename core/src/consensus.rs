@@ -9,12 +9,8 @@
 //! the embeddable building block the data plane drives until that integration
 //! lands, and it implements the same algorithm (term monotonicity, voted-for
 //! tracking, log matching, commit via majority).
-//!
-//! Persistence is abstracted behind [`StateStore`] (an in-memory default is
-//! provided for tests); a real deployment plugs in a disk-backed store so the
-//! `current_term`/`voted_for` survive restarts — closing the durability gap
-//! called out in the crate-level consistency model.
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -27,7 +23,7 @@ pub enum Role {
 }
 
 /// One replicated log entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub term: u64,
     /// 1-based position in the log.
@@ -86,6 +82,9 @@ pub struct RaftNode {
     last_applied: u64,
     /// Next index to send each peer (leader only).
     next_index: Vec<u64>,
+    /// Highest index replicated on each peer (leader only), used to advance the
+    /// commit index once a majority has acknowledged.
+    match_index: Vec<u64>,
     store: Arc<dyn StateStore>,
 }
 
@@ -98,7 +97,7 @@ impl RaftNode {
         let next_index = vec![1; majority.max(peers.len())];
         Self {
             id,
-            peers,
+            peers: peers.clone(),
             role: Role::Follower,
             current_term,
             voted_for,
@@ -106,6 +105,7 @@ impl RaftNode {
             commit_index: 0,
             last_applied: 0,
             next_index,
+            match_index: vec![0; peers.len()],
             store,
         }
     }
@@ -121,6 +121,93 @@ impl RaftNode {
     }
     pub fn commit_index(&self) -> u64 {
         self.commit_index
+    }
+    pub fn last_applied(&self) -> u64 {
+        self.last_applied
+    }
+    pub fn peers(&self) -> &[String] {
+        &self.peers
+    }
+
+    /// Total cluster size including this node (used for majority arithmetic).
+    /// `peers` already includes this node's own id (see [`RaftNode::new`]).
+    pub fn cluster_size(&self) -> u64 {
+        self.peers.len() as u64
+    }
+
+    /// The next index the leader should send to `peer` (1-based).
+    pub fn next_index_of(&self, peer: &str) -> u64 {
+        match self.peers.iter().position(|p| p == peer) {
+            Some(i) if i < self.next_index.len() => self.next_index[i],
+            _ => self.log_len() + 1,
+        }
+    }
+
+    /// Advance a peer's `next_index` (typically to `match_index + 1` after a
+    /// successful AppendEntries).
+    pub fn advance_next(&mut self, peer: &str, next: u64) {
+        if let Some(i) = self.peers.iter().position(|p| p == peer) {
+            if i < self.next_index.len() {
+                self.next_index[i] = next;
+            }
+        }
+    }
+
+    /// The `(index, term)` pair of the last entry in the log (used as the
+    /// `prev_log_*` arguments when the leader ships entries 1..N).
+    pub fn last_log(&self) -> (u64, u64) {
+        match self.log.last() {
+            Some(e) => (e.index, e.term),
+            None => (0, 0),
+        }
+    }
+
+    /// Entries from `start` (1-based, inclusive) to the end of the log.
+    pub fn entries_from(&self, start: u64) -> Vec<Entry> {
+        if start == 0 {
+            return self.log.clone();
+        }
+        self.log
+            .iter()
+            .skip_while(|e| e.index < start)
+            .cloned()
+            .collect()
+    }
+
+    /// True when `candidate`'s log is at least as up-to-date as ours, per the
+    /// Raft log-comparison rule (last term, then last index).
+    pub fn is_log_up_to_date(&self, last_index: u64, last_term: u64) -> bool {
+        let (my_index, my_term) = self.last_log();
+        last_term > my_term || (last_term == my_term && last_index >= my_index)
+    }
+
+    /// Advance `next_index`/`match_index` for a peer after an AppendEntries
+    /// response, then advance the leader's commit index to the highest index
+    /// replicated on a majority of nodes.
+    pub fn record_peer_ack(&mut self, peer: &str, peer_match: u64) {
+        if let Some(pi) = self.peers.iter().position(|p| p == peer) {
+            if pi < self.match_index.len() {
+                self.match_index[pi] = self.match_index[pi].max(peer_match);
+            }
+        }
+        // Count nodes (self + peers) that have replicated at least `idx`.
+        let majority = self.peers.len() as u64 / 2 + 1;
+        let mut idx = self.commit_index;
+        while idx < self.log_len() {
+            let next = idx + 1;
+            let replicated = 1u64
+                + self
+                    .match_index
+                    .iter()
+                    .filter(|m| **m >= next)
+                    .count() as u64;
+            if replicated >= majority && self.log[(next - 1) as usize].term == self.current_term {
+                idx = next;
+            } else {
+                break;
+            }
+        }
+        self.commit_index = idx;
     }
 
     /// Advance the commit index up to `idx` (clamped to the log length). A real
@@ -140,49 +227,31 @@ impl RaftNode {
         self.log.clone()
     }
 
-    fn last_log(&self) -> (u64, u64) {
-        match self.log.last() {
-            Some(e) => (e.index, e.term),
-            None => (0, 0),
-        }
-    }
-
-    /// Transition to candidate and run a (synchronous) election round: grant
-    /// our own vote, then collect votes from peers by calling `request_vote`
-    /// on each. Returns the number of votes received (including our own). The
-    /// caller supplies the transport via the `request_vote` closure.
-    pub fn start_election<F>(&mut self, request_vote: F) -> u64
-    where
-        F: Fn(&str, u64, u64, u64) -> Option<bool>,
-    {
+    /// Begin an election: bump the term, become candidate, grant our own vote.
+    /// Returns `(last_index, last_term)` for the request-vote RPCs. Caller must
+    /// NOT hold the node lock while awaiting the votes (see `collect_votes`) so
+    /// peers can answer without deadlock.
+    pub fn begin_election(&mut self) -> (u64, u64) {
         self.current_term += 1;
         self.store.save_term(self.current_term);
         self.role = Role::Candidate;
         self.voted_for = Some(self.id.clone());
         self.store.save_voted_for(Some(self.id.clone()));
+        self.last_log()
+    }
 
-        let (last_index, last_term) = self.last_log();
-        let mut votes = 1u64; // our own
-        for peer in &self.peers {
-            if peer == &self.id {
-                continue; // don't RPC ourselves; our own vote is already counted
-            }
-            if let Some(granted) = request_vote(peer, self.current_term, last_index, last_term) {
-                if granted {
-                    votes += 1;
-                }
-            }
-        }
+    /// Tally `votes` (including our own). Becomes Leader and resets per-peer
+    /// next indices on a majority. Caller must not hold the node lock across the
+    /// vote collection so peers can answer without deadlock.
+    pub fn finalize_election(&mut self, votes: u64) {
         let majority = self.peers.len() as u64 / 2 + 1;
         if votes >= majority {
             self.role = Role::Leader;
-            // Reinitialize per-peer next indices to just past our last entry.
             let next = self.log_len() + 1;
             for n in self.next_index.iter_mut() {
                 *n = next;
             }
         }
-        votes
     }
 
     /// Handle an incoming `RequestVote` RPC. Returns `(term, vote_granted)`.
@@ -230,12 +299,13 @@ impl RaftNode {
         if leader_term < self.current_term {
             return (self.current_term, false);
         }
-        // Newer term: step down to follower.
+        // Newer term: step down to follower. A leader receiving its own
+        // heartbeat (leader_term == current_term) must NOT demote itself.
         if leader_term > self.current_term {
             self.current_term = leader_term;
             self.store.save_term(self.current_term);
+            self.role = Role::Follower;
         }
-        self.role = Role::Follower;
 
         // Log consistency check at prev_log_index.
         let prev_ok = if prev_log_index == 0 {
@@ -307,6 +377,14 @@ impl RaftNode {
 mod tests {
     use super::*;
 
+    /// Block on a future inside a synchronous test.
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
     fn node(id: &str, peers: &[&str]) -> RaftNode {
         let ps: Vec<String> = peers.iter().map(|s| s.to_string()).collect();
         RaftNode::new(id.to_string(), ps, MemoryStore::new())
@@ -315,8 +393,8 @@ mod tests {
     #[test]
     fn single_node_elects_itself_leader() {
         let mut n = node("a", &["a"]);
-        let votes = n.start_election(|_, _, _, _| Some(true));
-        assert_eq!(votes, 1);
+        n.begin_election();
+        n.finalize_election(1);
         assert_eq!(n.role(), Role::Leader);
     }
 
@@ -352,8 +430,9 @@ mod tests {
     #[test]
     fn higher_term_forces_step_down() {
         let mut n = node("a", &["a", "b", "c"]);
-        // Win an election first.
-        n.start_election(|_, _, _, _| Some(true));
+        // Win an election first (3-node cluster, all 3 grant).
+        n.begin_election();
+        n.finalize_election(3);
         assert_eq!(n.role(), Role::Leader);
         // A newer-term AppendEntries from another leader steps us down.
         let (term, ok) = n.handle_append_entries(9, 0, 0, vec![], 0);
@@ -365,7 +444,8 @@ mod tests {
     #[test]
     fn append_entries_replicates_and_commits() {
         let mut leader = node("a", &["a", "b"]);
-        leader.start_election(|_, _, _, _| Some(true));
+        leader.begin_election();
+        leader.finalize_election(1);
         let idx1 = leader.leader_append(b"one".to_vec());
         let idx2 = leader.leader_append(b"two".to_vec());
         assert_eq!((idx1, idx2), (1, 2));
